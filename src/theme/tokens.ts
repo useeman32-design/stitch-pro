@@ -65,6 +65,7 @@ export const gradients = {
   indigoSubtle: [colors.indigoLight, colors.indigo] as const,
   navy: [colors.navy, '#171B34'] as const,
   navyHero: ['#0B0E1A', '#1B2050', '#2B2470'] as const,
+  heroPromo: ['#090B16', '#2A2470', '#3E63E0'] as const,
 };
 
 // ---------------------------------------------------------------------------

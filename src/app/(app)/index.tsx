@@ -17,7 +17,8 @@ import { designsService, type Design } from '@/services/designs';
 import type { ActivityItem, User } from '@/services/types';
 
 export default function DashboardScreen() {
-  const { isDesktop } = useResponsive();
+  const { isMobile } = useResponsive();
+  const isDesktop = !isMobile; // align with AppShell's sidebar/bottom-nav breakpoint
   const [user, setUser] = useState<User | undefined>();
   const [designs, setDesigns] = useState<Design[] | null>(null);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
