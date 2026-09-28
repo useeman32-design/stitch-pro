@@ -10,7 +10,7 @@ interface CreateButtonProps {
 
 export function CreateButton({ onPress }: CreateButtonProps) {
   return (
-    <View style={styles.wrap} pointerEvents="box-none">
+    <View style={[styles.wrap, { pointerEvents: 'box-none' }]}>
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
