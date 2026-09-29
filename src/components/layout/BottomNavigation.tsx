@@ -47,7 +47,7 @@ export function BottomNavigation({ onCreatePress }: BottomNavigationProps) {
   useEffect(() => {
     if (activeHref && layouts[activeHref]) {
       const { x, width } = layouts[activeHref];
-      const config = { damping: 18, stiffness: 220, mass: 0.6 };
+      const config = { damping: 14, stiffness: 180, mass: 0.7 };
       indicatorX.value = withSpring(x, config);
       indicatorWidth.value = withSpring(width, config);
       indicatorOpacity.value = withSpring(1, config);
@@ -100,8 +100,9 @@ export function BottomNavigation({ onCreatePress }: BottomNavigationProps) {
   return (
     <View style={[styles.floatWrap, { paddingBottom: Math.max(insets.bottom, 14) }]} pointerEvents="box-none">
       <View style={[styles.container, { height: sizes.bottomNavHeight }]}>
-        <BlurView intensity={48} tint="light" style={StyleSheet.absoluteFill} />
+        <BlurView intensity={65} tint="light" style={StyleSheet.absoluteFill} />
         <View style={styles.glassOverlay} pointerEvents="none" />
+        <View style={styles.glassTint} pointerEvents="none" />
 
         <View style={styles.row}>
           <View style={styles.group}>
@@ -141,30 +142,35 @@ const styles = StyleSheet.create({
     maxWidth: 480,
     flexDirection: 'row',
     paddingTop: 10,
-    borderRadius: radius.xl + 4,
+    borderRadius: 32,
     overflow: 'hidden',
-    backgroundColor: Platform.select({ web: 'rgba(255, 255, 255, 0.62)', default: 'rgba(255, 255, 255, 0.5)' }),
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.55)',
+    backgroundColor: Platform.select({ web: 'rgba(255, 255, 255, 0.55)', default: 'rgba(255, 255, 255, 0.45)' }),
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.65)',
     ...Platform.select({
       web: {
-        backdropFilter: 'blur(20px) saturate(160%)',
-        boxShadow: '0 12px 32px rgba(15, 18, 40, 0.16), 0 2px 8px rgba(15, 18, 40, 0.08)',
+        backdropFilter: 'blur(24px) saturate(180%)',
+        boxShadow:
+          '0 16px 40px rgba(91, 79, 232, 0.22), 0 4px 14px rgba(15, 18, 40, 0.10), inset 0 1px 0 rgba(255,255,255,0.6)',
       },
       default: {
-        shadowColor: '#0B0E1A',
-        shadowOpacity: 0.18,
-        shadowRadius: 20,
-        shadowOffset: { width: 0, height: 8 },
-        elevation: 12,
+        shadowColor: colors.indigo,
+        shadowOpacity: 0.28,
+        shadowRadius: 24,
+        shadowOffset: { width: 0, height: 10 },
+        elevation: 14,
       },
     }),
   },
   glassOverlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(255, 255, 255, 0.10)',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.7)',
+    borderTopColor: 'rgba(255, 255, 255, 0.75)',
+  },
+  glassTint: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(91, 79, 232, 0.05)',
   },
   row: {
     flex: 1,
