@@ -113,9 +113,48 @@ function delay<T>(value: T, ms = 350): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), ms));
 }
 
+let nextDesignSeq = 1;
+
 export const designsService = {
   async list(): Promise<Design[]> {
     return delay(mockDesigns);
+  },
+
+  /**
+   * Adds a freshly digitized design to the top of the mock library so it
+   * immediately shows up across My Designs / Dashboard recents — mirrors
+   * what a real "save design" API call would do.
+   */
+  async create(input: {
+    name: string;
+    thumbnail: Design['thumbnail'];
+    stitches: number;
+    colors: number;
+    sizeMm: { width: number; height: number };
+    category?: Design['category'];
+  }): Promise<Design> {
+    const design: Design = {
+      id: `des_new_${nextDesignSeq++}`,
+      name: input.name,
+      date: 'Just now',
+      format: 'DST',
+      status: 'completed',
+      favorite: false,
+      category: input.category ?? 'other',
+      thumbnail: input.thumbnail,
+      stitches: input.stitches,
+      colors: input.colors,
+      sizeMm: input.sizeMm,
+    };
+    mockDesigns.unshift(design);
+    mockActivity.unshift({
+      id: `act_new_${nextDesignSeq}`,
+      type: 'create',
+      message: 'Created new',
+      target: `"${input.name}"`,
+      timestamp: 'Just now',
+    });
+    return delay(design, 250);
   },
 
   async recent(limit = 5): Promise<Design[]> {
