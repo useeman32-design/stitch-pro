@@ -17,7 +17,7 @@ import { designsService, type Design } from '@/services/designs';
 import type { ActivityItem, User } from '@/services/types';
 
 export default function DashboardScreen() {
-  const { isMobile } = useResponsive();
+  const { isMobile, isWideDesktop } = useResponsive();
   const isDesktop = !isMobile; // align with AppShell's sidebar/bottom-nav breakpoint
   const [user, setUser] = useState<User | undefined>();
   const [designs, setDesigns] = useState<Design[] | null>(null);
@@ -43,19 +43,25 @@ export default function DashboardScreen() {
   return (
     <ScreenContainer noPadding={isDesktop}>
       {isDesktop ? (
-        <View style={styles.desktopLayout}>
-          <View style={styles.mainCol}>
+        <View style={[styles.desktopLayout, !isWideDesktop && styles.desktopLayoutStacked]}>
+          <View style={[styles.mainCol, !isWideDesktop && styles.mainColStacked]}>
             <TopHeader title={`Good morning, ${firstName || 'there'} 👋`} user={user} />
             <View style={styles.mainColInner}>
               <QuickCreateSection />
               <HeroBanner />
+              {!isWideDesktop && (
+                <UsageCard used={user?.creditsUsed ?? 0} total={user?.creditsTotal ?? 100} />
+              )}
               <RecentProjects designs={designs} onToggleFavorite={toggleFavorite} />
+              {!isWideDesktop && <ActivityFeed items={activity} />}
             </View>
           </View>
-          <View style={styles.sideCol}>
-            <UsageCard used={user?.creditsUsed ?? 0} total={user?.creditsTotal ?? 100} />
-            <ActivityFeed items={activity} />
-          </View>
+          {isWideDesktop && (
+            <View style={styles.sideCol}>
+              <UsageCard used={user?.creditsUsed ?? 0} total={user?.creditsTotal ?? 100} />
+              <ActivityFeed items={activity} />
+            </View>
+          )}
         </View>
       ) : (
         <View style={{ gap: spacing.xl }}>
@@ -81,8 +87,15 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xl,
     paddingBottom: spacing.xxxl,
   },
+  desktopLayoutStacked: {
+    flexDirection: 'column',
+  },
   mainCol: {
     flex: 2.2,
+    width: '100%',
+  },
+  mainColStacked: {
+    flex: undefined,
   },
   mainColInner: {
     gap: spacing.xxl,

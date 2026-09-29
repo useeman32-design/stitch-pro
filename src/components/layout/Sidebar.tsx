@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter, usePathname } from 'expo-router';
-import { ChevronsLeft, ChevronsRight } from 'lucide-react-native';
+import { ChevronsLeft, ChevronsRight, Menu } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import { colors, sizes, spacing, typography } from '@/theme';
 import { mainNavItems, learnNavItems, systemNavItems } from '@/constants/navigation';
 import { Avatar } from '@/components/ui/Avatar';
@@ -88,16 +89,39 @@ function SectionLabel({ children, collapsed }: { children: string; collapsed: bo
 export function Sidebar({ collapsed, onToggleCollapsed, user }: SidebarProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const progress = useSharedValue(collapsed ? 1 : 0);
+
+  useEffect(() => {
+    progress.value = withTiming(collapsed ? 1 : 0, { duration: 240, easing: Easing.inOut(Easing.quad) });
+  }, [collapsed]);
+
+  const animatedContainerStyle = useAnimatedStyle(() => ({
+    width:
+      sizes.sidebarWidth - progress.value * (sizes.sidebarWidth - sizes.sidebarCollapsedWidth),
+  }));
 
   const isActive = (href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));
 
   return (
-    <View style={[styles.container, { width: collapsed ? sizes.sidebarCollapsedWidth : sizes.sidebarWidth }]}>
+    <Animated.View style={[styles.container, animatedContainerStyle]}>
       <View style={[styles.brandRow, collapsed && styles.brandRowCollapsed]}>
-        <View style={styles.brandMark}>
-          <StitchMark size={20} />
+        <View style={styles.brandGroup}>
+          <View style={styles.brandMark}>
+            <StitchMark size={20} />
+          </View>
+          {!collapsed && <Text style={styles.brandText}>STITCHPRO</Text>}
         </View>
-        {!collapsed && <Text style={styles.brandText}>STITCHPRO</Text>}
+        {!collapsed && (
+          <Pressable
+            onPress={onToggleCollapsed}
+            accessibilityRole="button"
+            accessibilityLabel="Collapse sidebar"
+            style={styles.hamburgerBtn}
+            hitSlop={8}
+          >
+            <Menu size={18} color={colors.textOnNavySecondary} />
+          </Pressable>
+        )}
       </View>
 
       <ScrollView
@@ -168,7 +192,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, user }: SidebarProps) {
           )}
         </View>
       )}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -181,9 +205,22 @@ const styles = StyleSheet.create({
   brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: spacing.sm,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xl,
+  },
+  brandGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  hamburgerBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   brandRowCollapsed: {
     paddingHorizontal: 0,

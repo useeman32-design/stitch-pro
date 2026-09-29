@@ -1,9 +1,10 @@
 import React from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
-import { Bell, Search } from 'lucide-react-native';
+import { Bell, Menu, Search } from 'lucide-react-native';
 import { colors, radius, sizes, spacing, typography } from '@/theme';
 import { Avatar } from '@/components/ui/Avatar';
 import { IconButton } from '@/components/ui/IconButton';
+import { useSidebar } from '@/contexts/SidebarContext';
 import type { User } from '@/services/types';
 
 interface TopHeaderProps {
@@ -13,8 +14,19 @@ interface TopHeaderProps {
 }
 
 export function TopHeader({ title, showSearch = true, user }: TopHeaderProps) {
+  const { toggleCollapsed } = useSidebar();
+
   return (
     <View style={styles.container}>
+      <IconButton
+        accessibilityLabel="Toggle sidebar"
+        variant="filled"
+        size={40}
+        onPress={toggleCollapsed}
+      >
+        <Menu size={19} color={colors.textSecondary} />
+      </IconButton>
+
       <View style={{ flex: 1 }}>
         {title ? <Text style={typography.h2}>{title}</Text> : null}
         {showSearch && (

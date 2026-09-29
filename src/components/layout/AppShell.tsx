@@ -5,6 +5,7 @@ import { useResponsive } from '@/hooks/useResponsive';
 import { colors, sizes } from '@/theme';
 import { authService } from '@/services/auth';
 import type { User } from '@/services/types';
+import { SidebarProvider, useSidebar } from '@/contexts/SidebarContext';
 import { Sidebar } from './Sidebar';
 import { BottomNavigation } from './BottomNavigation';
 import { CreateSheet } from './CreateSheet';
@@ -13,9 +14,18 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
+function DesktopShell({ children, user }: { children: React.ReactNode; user?: User }) {
+  const { collapsed, toggleCollapsed } = useSidebar();
+  return (
+    <View style={styles.desktopRoot}>
+      <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} user={user} />
+      <View style={styles.content}>{children}</View>
+    </View>
+  );
+}
+
 export function AppShell({ children }: AppShellProps) {
   const { isMobile } = useResponsive();
-  const [collapsed, setCollapsed] = useState(false);
   const [createSheetVisible, setCreateSheetVisible] = useState(false);
   const [user, setUser] = useState<User | undefined>(undefined);
   const insets = useSafeAreaInsets();
@@ -35,10 +45,9 @@ export function AppShell({ children }: AppShellProps) {
   }
 
   return (
-    <View style={styles.desktopRoot}>
-      <Sidebar collapsed={collapsed} onToggleCollapsed={() => setCollapsed((c) => !c)} user={user} />
-      <View style={styles.content}>{children}</View>
-    </View>
+    <SidebarProvider>
+      <DesktopShell user={user}>{children}</DesktopShell>
+    </SidebarProvider>
   );
 }
 

@@ -13,6 +13,9 @@ export function useResponsive() {
   const isTablet = width >= breakpoints.tablet;
   const isDesktop = width >= breakpoints.desktop;
   const isMobile = !isTablet;
+  // True once there's enough room for a persistent two-column layout
+  // (main content + a side rail) without squeezing either.
+  const isWideDesktop = width >= breakpoints.wide;
 
-  return { width, height, isMobile, isTablet, isDesktop };
+  return { width, height, isMobile, isTablet, isDesktop, isWideDesktop };
 }

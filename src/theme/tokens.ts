@@ -194,4 +194,8 @@ export const sizes = {
 export const breakpoints = {
   tablet: 768,
   desktop: 1024,
+  // Below this, the desktop sidebar shell stays, but multi-column page
+  // layouts (e.g. Dashboard's main + side rail) stack into a single column
+  // instead of squeezing — prevents cramped text-wrap on laptop-width windows.
+  wide: 1200,
 } as const;

@@ -37,8 +37,10 @@ export function CreateButton({ onPress }: CreateButtonProps) {
 const styles = StyleSheet.create({
   wrap: {
     position: 'absolute',
-    alignSelf: 'center',
+    left: 0,
+    right: 0,
     top: -28,
+    alignItems: 'center',
     zIndex: 20,
   },
   pressable: {

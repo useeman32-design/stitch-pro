@@ -27,10 +27,13 @@ export function BottomNavigation({ onCreatePress }: BottomNavigationProps) {
 
   return (
     <View style={[styles.container, { height: sizes.bottomNavHeight + insets.bottom, paddingBottom: insets.bottom }]}>
-      <CreateButton onPress={onCreatePress} />
       {items.map((item) => {
         if (item.icon === null) {
-          return <View key="create-spacer" style={styles.item} />;
+          return (
+            <View key="create-spacer" style={styles.item}>
+              <CreateButton onPress={onCreatePress} />
+            </View>
+          );
         }
         const Icon = item.icon;
         const active = isActive(item.href);
