@@ -132,12 +132,13 @@ export const designsService = {
     colors: number;
     sizeMm: { width: number; height: number };
     category?: Design['category'];
+    format?: Design['format'];
   }): Promise<Design> {
     const design: Design = {
       id: `des_new_${nextDesignSeq++}`,
       name: input.name,
       date: 'Just now',
-      format: 'DST',
+      format: input.format ?? 'DST',
       status: 'completed',
       favorite: false,
       category: input.category ?? 'other',
