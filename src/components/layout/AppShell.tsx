@@ -35,9 +35,14 @@ export function AppShell({ children }: AppShellProps) {
   }, []);
 
   if (isMobile) {
+    // BottomNavigation now floats above the bottom edge as an absolutely
+    // positioned overlay (for the glassy/rounded floating look), so the
+    // scrollable content area needs its own bottom padding to keep the last
+    // bit of content from being covered by the bar + its floating margin.
+    const navClearance = sizes.bottomNavHeight + Math.max(insets.bottom, 14) + 28;
     return (
       <View style={styles.mobileRoot}>
-        <View style={{ flex: 1 }}>{children}</View>
+        <View style={{ flex: 1, paddingBottom: navClearance }}>{children}</View>
         <BottomNavigation onCreatePress={() => setCreateSheetVisible(true)} />
         <CreateSheet visible={createSheetVisible} onClose={() => setCreateSheetVisible(false)} />
       </View>
