@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { useRouter, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -39,19 +39,19 @@ export function BottomNavigation({ onCreatePress }: BottomNavigationProps) {
   // Tracks each tab's measured layout so the animated highlight pill can
   // glide to the correct x position/width whenever the active tab changes.
   const [layouts, setLayouts] = useState<Record<string, { x: number; width: number }>>({});
+  const [hasMeasured, setHasMeasured] = useState(false);
   const indicatorX = useSharedValue(0);
   const indicatorWidth = useSharedValue(0);
   const indicatorOpacity = useSharedValue(0);
-  const hasMeasured = useRef(false);
 
   useEffect(() => {
     if (activeHref && layouts[activeHref]) {
       const { x, width } = layouts[activeHref];
-      const config = { damping: 14, stiffness: 180, mass: 0.7 };
+      const config = { damping: 20, stiffness: 260, mass: 0.6 };
       indicatorX.value = withSpring(x, config);
       indicatorWidth.value = withSpring(width, config);
       indicatorOpacity.value = withSpring(1, config);
-      hasMeasured.current = true;
+      if (!hasMeasured) setHasMeasured(true);
     }
   }, [activeHref, layouts]);
 
@@ -99,28 +99,33 @@ export function BottomNavigation({ onCreatePress }: BottomNavigationProps) {
 
   return (
     <View style={[styles.floatWrap, { paddingBottom: Math.max(insets.bottom, 14) }]} pointerEvents="box-none">
-      <View style={[styles.container, { height: sizes.bottomNavHeight }]}>
-        <BlurView intensity={65} tint="light" style={StyleSheet.absoluteFill} />
-        <View style={styles.glassOverlay} pointerEvents="none" />
-        <View style={styles.glassTint} pointerEvents="none" />
+      {/* `barShell` has NO overflow clipping — it exists purely so the CREATE
+          button can float above the glass pill without being cut off by the
+          pill's own `overflow: hidden` (which is required for the blur +
+          rounded corners to clip correctly). */}
+      <View style={styles.barShell}>
+        <View style={[styles.container, { height: sizes.bottomNavHeight }]}>
+          <BlurView intensity={65} tint="light" style={StyleSheet.absoluteFill} pointerEvents="none" />
+          <View style={styles.glassOverlay} pointerEvents="none" />
+          <View style={styles.glassTint} pointerEvents="none" />
 
-        <View style={styles.row}>
-          <View style={styles.group}>
-            {hasMeasured.current && (
-              <Animated.View style={[styles.indicator, indicatorStyle]} pointerEvents="none" />
-            )}
-            {leftItems.map(renderItem)}
+          <View style={styles.row}>
+            <View style={styles.group}>
+              {hasMeasured && (
+                <Animated.View style={[styles.indicator, indicatorStyle]} pointerEvents="none" />
+              )}
+              {leftItems.map(renderItem)}
+            </View>
+            {/* Reserves horizontal space for the floating CREATE button so the
+                two side groups stay evenly split around the true bar center. */}
+            <View style={styles.middleSpacer} pointerEvents="none" />
+            <View style={styles.group}>{rightItems.map(renderItem)}</View>
           </View>
-          {/* Reserves horizontal space for the floating CREATE button so the
-              two side groups stay evenly split around the true bar center. */}
-          <View style={styles.middleSpacer} pointerEvents="none" />
-          <View style={styles.group}>{rightItems.map(renderItem)}</View>
         </View>
 
-        {/* Rendered as a direct sibling of `row` (not nested inside one of its
-            flex children) and centered against the full-width `container`, so
-            its horizontal centering never depends on the side groups' content
-            being symmetric. */}
+        {/* Sibling of the glass pill (not nested inside it), so it isn't
+            clipped when it pokes above the pill's top edge. Still centers
+            correctly since `barShell` shares the pill's exact width/maxWidth. */}
         <CreateButton onPress={onCreatePress} />
       </View>
     </View>
@@ -136,10 +141,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     alignItems: 'center',
   },
-  container: {
+  barShell: {
     position: 'relative',
     width: '100%',
     maxWidth: 480,
+  },
+  container: {
+    position: 'relative',
+    width: '100%',
     flexDirection: 'row',
     paddingTop: 10,
     borderRadius: 32,

@@ -10,12 +10,16 @@ interface CreateButtonProps {
 
 export function CreateButton({ onPress }: CreateButtonProps) {
   return (
-    <View style={[styles.wrap, { pointerEvents: 'box-none' }]}>
+    <View style={styles.wrap} pointerEvents="box-none">
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
         accessibilityLabel="Create new design"
-        style={({ pressed }) => [styles.pressable, pressed && { transform: [{ scale: 0.96 }] }]}
+        style={({ pressed }) => [
+          styles.pressable,
+          { borderRadius: sizes.createButtonSize / 2 },
+          pressed && { transform: [{ scale: 0.96 }] },
+        ]}
       >
         <LinearGradient
           colors={gradients.indigo}
@@ -23,7 +27,11 @@ export function CreateButton({ onPress }: CreateButtonProps) {
           end={{ x: 1, y: 1 }}
           style={[
             styles.button,
-            { width: sizes.createButtonSize, height: sizes.createButtonSize },
+            {
+              width: sizes.createButtonSize,
+              height: sizes.createButtonSize,
+              borderRadius: sizes.createButtonSize / 2,
+            },
             shadows.raised as object,
           ]}
         >
@@ -43,11 +51,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 20,
   },
-  pressable: {
-    borderRadius: 20,
-  },
+  pressable: {},
   button: {
-    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 4,
