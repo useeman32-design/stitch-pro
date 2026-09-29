@@ -25,6 +25,7 @@ import {
 } from '@/services/digitizing';
 import { threadsService } from '@/services/threads';
 import type { ThreadColor } from '@/services/types';
+import { generateRealStitchPlan } from '@/utils/stitchPlanner';
 
 const placements: Placement[] = ['Left Chest', 'Center Front', 'Full Back', 'Sleeve', 'Cap Front', 'Custom'];
 const fabrics: FabricType[] = ['Cotton Twill', 'Denim', 'Fleece', 'Leather', 'Knit / Jersey', 'Custom'];
@@ -65,6 +66,7 @@ export default function DesignSettingsScreen() {
     removeThreadColor,
     replaceThreadColor,
     setStitchPlan,
+    setDstPoints,
   } = useDigitizeWizard();
   const [threads, setThreads] = useState<ThreadColor[]>([]);
   const [generating, setGenerating] = useState(false);
@@ -104,8 +106,37 @@ export default function DesignSettingsScreen() {
 
   const handleGenerate = async () => {
     setGenerating(true);
-    const plan = await digitizingService.generateStitchPlan(settings, analysis ?? undefined);
-    setStitchPlan(plan);
+    try {
+      // Real pipeline: turns the actual analyzed artwork into a real,
+      // physical stitch sequence (see stitchPlanner.ts) — the numbers shown
+      // from here on and the eventual .dst download are the same data,
+      // not a separate estimate.
+      const palette = threadColors.length ? threadColors : (analysis?.dominantColors ?? ['#5B4FE8']);
+      const real = await generateRealStitchPlan(
+        artwork?.uri,
+        palette,
+        settings.widthMm,
+        settings.heightMm,
+        settings.density
+      );
+      setStitchPlan({
+        stitches: real.stitches,
+        colors: real.colors,
+        estimatedThreadMeters: real.estimatedThreadMeters,
+        estimatedTimeMinutes: real.estimatedTimeMinutes,
+        threadChanges: real.threadChanges,
+        jumps: real.jumps,
+        trims: real.trims,
+        sizeMm: real.sizeMm,
+      });
+      setDstPoints(real.points);
+    } catch {
+      // Fallback only if real generation can't run (e.g. image failed to
+      // decode) — keeps the wizard usable, but this path produces no real
+      // downloadable file, so success.tsx must handle a missing dstPoints.
+      const plan = await digitizingService.generateStitchPlan(settings, analysis ?? undefined);
+      setStitchPlan(plan);
+    }
     setGenerating(false);
     router.push('/create/auto-digitize/preview');
   };

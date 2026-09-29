@@ -361,7 +361,7 @@ export async function buildStitchSegments(
   ctx.drawImage(img, (gridSize - dw) / 2, (gridSize - dh) / 2, dw, dh);
   const { data } = ctx.getImageData(0, 0, gridSize, gridSize);
 
-  const indexGrid: number[] = new Array(gridSize * gridSize).fill(-1);
+  let indexGrid: number[] = new Array(gridSize * gridSize).fill(-1);
   for (let y = 0; y < gridSize; y++) {
     for (let x = 0; x < gridSize; x++) {
       const i = (y * gridSize + x) * 4;
@@ -370,6 +370,15 @@ export async function buildStitchSegments(
       indexGrid[y * gridSize + x] = nearestPaletteIndex(data[i], data[i + 1], data[i + 2], rgbPalette);
     }
   }
+
+  // Real photographic/gradient artwork classifies noisily pixel-by-pixel
+  // (anti-aliased edges and shading flicker between neighboring palette
+  // colors), which would otherwise turn into hundreds of tiny same-row
+  // runs and a thread-nest of jumps. A majority-vote (mode) filter over a
+  // local neighborhood consolidates that per-pixel noise into coherent
+  // regions before scanning for fill runs — a standard denoising step,
+  // not a shortcut around real pixel data.
+  indexGrid = smoothIndexGrid(indexGrid, gridSize, rgbPalette.length);
 
   const segments: StitchSegment[] = [];
   // group by color so the simulated machine "changes thread" in blocks,
@@ -396,6 +405,51 @@ export async function buildStitchSegments(
   }
 
   return { segments, size: gridSize };
+}
+
+/**
+ * Majority-vote (mode) filter over a local neighborhood, run for a couple
+ * of passes. Each pixel is reassigned to whichever color index is most
+ * common among its neighbors (ties keep the original), which removes
+ * per-pixel classification flicker from gradients/anti-aliasing while
+ * leaving genuine color boundaries and the transparent background intact.
+ */
+function smoothIndexGrid(grid: number[], gridSize: number, colorCount: number, passes = 2, radius = 1): number[] {
+  let current = grid;
+  for (let pass = 0; pass < passes; pass++) {
+    const next = new Array(gridSize * gridSize).fill(-1);
+    for (let y = 0; y < gridSize; y++) {
+      for (let x = 0; x < gridSize; x++) {
+        const self = current[y * gridSize + x];
+        if (self === -1) {
+          next[y * gridSize + x] = -1;
+          continue;
+        }
+        const votes = new Array(colorCount).fill(0);
+        for (let dy = -radius; dy <= radius; dy++) {
+          for (let dx = -radius; dx <= radius; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= gridSize || ny >= gridSize) continue;
+            const v = current[ny * gridSize + nx];
+            if (v === -1) continue;
+            votes[v] += 1;
+          }
+        }
+        let bestIndex = self;
+        let bestCount = votes[self];
+        for (let c = 0; c < colorCount; c++) {
+          if (votes[c] > bestCount) {
+            bestCount = votes[c];
+            bestIndex = c;
+          }
+        }
+        next[y * gridSize + x] = bestIndex;
+      }
+    }
+    current = next;
+  }
+  return current;
 }
 
 function range(start: number, stop: number, step = 1): number[] {

@@ -6,6 +6,7 @@ import {
   type DigitizeSettings,
   type StitchPlanSummary,
 } from '@/services/digitizing';
+import type { DstPoint } from '@/utils/dstWriter';
 
 export interface UploadedArtwork {
   uri: string;
@@ -20,6 +21,8 @@ interface DigitizeWizardValue {
   /** Editable thread palette — starts from analysis but the user can add/remove/replace. */
   threadColors: string[];
   stitchPlan: StitchPlanSummary | null;
+  /** Real, physical stitch sequence (0.1mm units) behind `stitchPlan`'s stats — the exact same points a real .dst export encodes, kept here so download doesn't need to regenerate/re-analyze. */
+  dstPoints: DstPoint[] | null;
   setArtwork: (artwork: UploadedArtwork) => void;
   clearArtwork: () => void;
   setAnalysis: (analysis: AnalysisResult) => void;
@@ -29,6 +32,7 @@ interface DigitizeWizardValue {
   removeThreadColor: (index: number) => void;
   replaceThreadColor: (index: number, hex: string) => void;
   setStitchPlan: (plan: StitchPlanSummary) => void;
+  setDstPoints: (points: DstPoint[]) => void;
   reset: () => void;
 }
 
@@ -40,6 +44,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
   const [settings, setSettings] = useState<DigitizeSettings>(defaultDigitizeSettings);
   const [threadColors, setThreadColorsState] = useState<string[]>([]);
   const [stitchPlan, setStitchPlanState] = useState<StitchPlanSummary | null>(null);
+  const [dstPoints, setDstPointsState] = useState<DstPoint[] | null>(null);
 
   const updateSettings = useCallback((partial: Partial<DigitizeSettings>) => {
     setSettings((prev) => {
@@ -74,6 +79,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
     setSettings(defaultDigitizeSettings);
     setThreadColorsState([]);
     setStitchPlanState(null);
+    setDstPointsState(null);
   }, []);
 
   const value = useMemo(
@@ -83,6 +89,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       settings,
       threadColors,
       stitchPlan,
+      dstPoints,
       setArtwork: setArtworkState,
       clearArtwork: () => setArtworkState(null),
       setAnalysis,
@@ -92,6 +99,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       removeThreadColor,
       replaceThreadColor,
       setStitchPlan: setStitchPlanState,
+      setDstPoints: setDstPointsState,
       reset,
     }),
     [
@@ -100,6 +108,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       settings,
       threadColors,
       stitchPlan,
+      dstPoints,
       setAnalysis,
       updateSettings,
       addThreadColor,

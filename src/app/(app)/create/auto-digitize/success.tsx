@@ -12,12 +12,13 @@ import { useDigitizeWizard } from '@/contexts/DigitizeWizardContext';
 import { designsService, type Design } from '@/services/designs';
 import type { StitchFormat } from '@/services/types';
 import { useResponsive } from '@/hooks/useResponsive';
+import { buildDstFile } from '@/utils/dstWriter';
 
 const FORMATS: StitchFormat[] = ['DST', 'PES', 'JEF', 'EXP', 'VP3', 'HUS'];
 
 export default function DigitizeSuccessScreen() {
   const router = useRouter();
-  const { artwork, settings, stitchPlan, reset } = useDigitizeWizard();
+  const { artwork, settings, stitchPlan, dstPoints, reset } = useDigitizeWizard();
   const { show } = useToast();
   const { isMobile } = useResponsive();
   const savedRef = useRef(false);
@@ -49,7 +50,29 @@ export default function DigitizeSuccessScreen() {
   const artworkSource = { uri: artwork.uri };
 
   const handleDownload = (format: StitchFormat) => {
-    show(`${artwork.name}.${format.toLowerCase()} downloaded`, 'success');
+    if (format !== 'DST') {
+      show(`${format} isn't wired up yet — DST is the real, downloadable format for now (works on virtually every machine).`, 'info');
+      return;
+    }
+    if (!dstPoints || dstPoints.length === 0) {
+      show("Couldn't generate a real stitch file for this design — try again from Settings.", 'error');
+      return;
+    }
+    try {
+      const bytes = buildDstFile(dstPoints, { name: artwork.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 16) || 'STITCHPRO' });
+      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${artwork.name.replace(/\.[^/.]+$/, '') || 'design'}.dst`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      show(`${artwork.name}.dst downloaded — a real, machine-readable Tajima DST file.`, 'success');
+    } catch {
+      show('Something went wrong generating the DST file.', 'error');
+    }
   };
 
   const handleCreateAnother = () => {
