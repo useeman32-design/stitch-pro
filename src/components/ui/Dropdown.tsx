@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View, type ViewInstance } from 'react-native';
 import { ChevronDown, Check } from 'lucide-react-native';
 import { colors, radius, shadows, spacing, typography } from '@/theme';
 
@@ -25,7 +25,7 @@ export function Dropdown<T extends string>({
 }: DropdownProps<T>) {
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState({ x: 0, y: 0, w: 0, h: 0 });
-  const triggerRef = React.useRef<View>(null);
+  const triggerRef = React.useRef<ViewInstance>(null);
   const selected = options.find((o) => o.value === value);
 
   const openMenu = () => {

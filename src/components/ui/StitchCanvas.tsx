@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View, type ViewInstance } from 'react-native';
 import { colors, radius } from '@/theme';
 import type { StitchSegment } from '@/utils/stitchEngine';
 
@@ -17,7 +17,7 @@ interface StitchCanvasProps {
  * genuine generated stitch segment), not a photo being wiped away.
  */
 export function StitchCanvas({ segments, palette, gridSize, progress, onNeedlePosition }: StitchCanvasProps) {
-  const wrapRef = useRef<View>(null);
+  const wrapRef = useRef<ViewInstance>(null);
   const canvasRef = useRef<any>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
 

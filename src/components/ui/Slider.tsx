@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View, type ViewInstance } from 'react-native';
 import { colors, radius } from '@/theme';
 
 interface SliderProps {
@@ -30,7 +30,7 @@ export function Slider({
   trackColor = colors.gray200,
   fillColor = colors.indigo,
 }: SliderProps) {
-  const trackRef = useRef<View>(null);
+  const trackRef = useRef<ViewInstance>(null);
   const [trackWidth, setTrackWidth] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [rect, setRect] = useState<{ left: number; width: number } | null>(null);
