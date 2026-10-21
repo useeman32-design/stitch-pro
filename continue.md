@@ -268,14 +268,48 @@ above for quick visual checks.)
   `overflow:hidden` + `border-radius` + `backdrop-filter` combos is historically
   inconsistent) that a Chromium-based Playwright check won't catch — ask for a
   screenshot and the exact browser/device if this comes up again.
-- **Real DST file download (done, deployed):** the auto-digitize flow
-  (`src/app/(app)/create/auto-digitize/success.tsx`) generates a real, valid
-  Tajima DST file client-side via `src/utils/dstWriter.ts` and triggers an actual
-  browser file download (Blob + `<a download>`) when the user taps the DST format
-  chip. Other formats (PES/JEF/EXP/VP3/HUS) intentionally show an "isn't wired up
-  yet" toast — only DST is real so far. Verified with a real Playwright download
-  event on the live GitHub Pages URL (downloaded file had valid DST header
-  fields: stitch count, color count, etc.).
+- **Frontend ↔ backend integration (done, deployed — this was the big missing
+  link):** until this milestone, `stitch-pro` and `stitchpro-backend` were two
+  completely disconnected codebases. The auto-digitize flow
+  (`src/app/(app)/create/auto-digitize/success.tsx`) still does its own real
+  client-side artwork analysis + stitch-plan math (canvas pixel scan →
+  `src/utils/stitchEngine.ts` → `src/utils/stitchPlanner.ts`, producing a real
+  `DstPoint[]` stitch sequence) — that part was already genuine and stays as-is.
+  What changed: `src/services/digitizing/backendClient.ts` now sends that
+  stitch-point stream + the thread color list to the real Python backend's
+  `POST /api/design/points-to-file`, which uses pyembroidery to encode a real,
+  byte-accurate file in **any of DST/PES/JEF/VP3/EXP** — not just DST. The
+  download handler tries the backend first for every format (even DST, since
+  the backend's pyembroidery-based encoder is more authoritative than the
+  hand-rolled client-side `src/utils/dstWriter.ts`), and falls back to that
+  client-side DST-only writer if the backend is unreachable/unconfigured/times
+  out (8s timeout) — so production never breaks even with zero backend hosted.
+  Only `HUS` has no real export either way (pyembroidery has no HUS writer).
+  - **Backend URL is empty (disabled) by default in production** — see
+    `DEFAULT_BACKEND_URL` at the top of `backendClient.ts`. To test against a
+    running backend without rebuilding, run in the browser console:
+    `localStorage.setItem('stitchpro_backend_url', 'http://<host>:<port>')`
+    (and `localStorage.removeItem(...)` to go back to the default/fallback
+    behavior). Once a real, persistent backend host exists (see §7 cPanel
+    hosting notes), update `DEFAULT_BACKEND_URL` itself and redeploy.
+  - **Verified end-to-end live** via Playwright driving the actual wizard UI
+    (upload a sample → analyze → settings → preview → success → click a
+    format chip) against a locally-running `stitchpro-backend` instance: real
+    PES and DST files were downloaded and round-tripped correctly through
+    pyembroidery's own readers (correct stitch counts, 5 thread colors,
+    correct bounds). Also verified the fallback path with the backend
+    disabled: DST still downloads via the client-side writer, other formats
+    show an honest "couldn't reach the backend" toast instead of crashing or
+    claiming to be permanently unsupported.
+  - **Known limitation to fix eventually:** `compile_design`/`EmbroideryDesign`
+    (the model-driven path used by future satin/fill milestones) and
+    `points_to_file` (the raw-point-stream path the frontend uses today) are
+    two separate compilation routes into pyembroidery — see
+    `formats/points_writer.py`'s docstring in the backend repo for the
+    reasoning. Once server-side digitizing (real image → vector segmentation →
+    satin/fill) lands, new designs should move to the `EmbroideryDesign` path;
+    the point-stream bridge is intentionally a stepping stone, not the
+    permanent architecture.
 - Design tokens live in `src/theme/tokens.ts` (colors, spacing, radius, typography,
   shadows, sizes) — always import from there, never hardcode raw values, per the
   codebase's own convention.
@@ -313,9 +347,37 @@ above for quick visual checks.)
   already has `RUNNING`, `SATIN`, `FILL` defined (with `COLUMN`/`APPLIQUE`/
   `SPECIAL` reserved for later per the original project brief's §8), but only
   the running-stitch path has real logic behind it so far.
+- **API surface (current, real):**
+  - `GET /api/health` — liveness check.
+  - `GET /api/formats` — returns the list of real supported export format ids
+    (currently `["dst", "pes", "jef", "vp3", "exp"]`).
+  - `POST /api/design/line-to-dst` — legacy Milestone-1 test endpoint, a single
+    raw polyline → DST only. Kept for backward compat; not used by the
+    frontend.
+  - `POST /api/design/points-to-file` — **the real integration endpoint the
+    frontend actually calls.** Takes an already-computed point stream
+    (`{x, y, command}` in 0.1mm absolute units, `command` one of
+    `jump`/`stitch`/`colorChange`/`end` — exactly stitch-pro's own `DstPoint[]`
+    convention) plus an optional ordered `colors` array and a `format`, and
+    returns a real file in that format. See `formats/points_writer.py` for why
+    this bypasses the `EmbroideryDesign`/`ObjectType` model (it's compiling an
+    already-complete stitch plan, not re-digitizing artwork).
+  - CORS is wide open (`Access-Control-Allow-Origin: *`) in `api/app.py` so a
+    browser-hosted frontend on a different origin (e.g. GitHub Pages) can call
+    it directly — tighten this once there's real user auth/session state to
+    protect.
 - Hosting: Python/Flask via cPanel's "Setup Python App" (Passenger/WSGI) — user
   confirmed their plan has this option, so no VPS pivot is needed. Remember the
   WSGI-only constraint from §5 when adding anything backend-side.
+  **Nothing has been deployed to cPanel yet** — the agent has no cPanel
+  credentials/access, so this backend has only ever been run and tested
+  in-sandbox (`python3 api/app.py`, binds `0.0.0.0:5050`). The user (or a human
+  with cPanel access) needs to actually set up the Python App there, install
+  `requirements.txt`, point `passenger_wsgi.py` at `api/app.py`'s `app` object,
+  and give it a real persistent domain/subdomain — then update
+  `DEFAULT_BACKEND_URL` in the frontend's `backendClient.ts` to that URL,
+  rebuild, and redeploy. Ask the user for a walkthrough of their specific
+  cPanel panel if/when this is actually attempted.
 
 ---
 
@@ -324,13 +386,26 @@ above for quick visual checks.)
 1. If the user reports the bottom-nav bugs are still happening after everything
    in §6, get a screenshot + exact browser/device before changing anything
    further — don't guess blindly at more CSS tweaks.
-2. Backend Milestone 2: implement satin stitch generation in `digitizer/model.py`
+2. **Deploy `stitchpro-backend` somewhere persistent** (ideally the user's real
+   cPanel hosting — see §7's hosting note) and update `DEFAULT_BACKEND_URL` in
+   `src/services/digitizing/backendClient.ts` to point at it, then rebuild +
+   redeploy the frontend. Right now real multi-format export (PES/JEF/VP3/EXP)
+   only works when someone manually points the app at an in-sandbox backend via
+   the `localStorage` override — it's not live for real users yet.
+3. Backend Milestone 2: implement satin stitch generation in `digitizer/model.py`
    / the digitizing pipeline, following the same data-model discipline (stitch
    plan → `formats/dst/writer.py` → pyembroidery, nothing bypasses that layering).
    Use `research/inkstitch-notes.md` as a conceptual reference for satin column
    algorithms (rails + zigzag + underlay types + pull compensation) — reimplement
    independently, never port Ink/Stitch's actual (GPL) code.
-3. Once satin is in, re-run the full push/deploy loop for both repos as usual.
+4. Once server-side digitizing (real segmentation into satin/fill regions, not
+   just the frontend's canvas-based color-run scan) exists, migrate the
+   frontend off the `points-to-file` bridge endpoint onto a proper
+   `EmbroideryDesign`-based `/api/digitize` (upload an image, get a full
+   multi-stitch-type design back) — see `formats/points_writer.py`'s docstring
+   for why the current integration is a deliberate stepping stone, not the
+   final architecture.
+5. Once satin is in, re-run the full push/deploy loop for both repos as usual.
 4. Revisit the `scikit-image`/SciPy hosting question once the user's actual
    cPanel Python App environment exists, before committing further to that
    stack for Milestone 5.
