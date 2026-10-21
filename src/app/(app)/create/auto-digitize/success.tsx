@@ -13,16 +13,28 @@ import { designsService, type Design } from '@/services/designs';
 import type { StitchFormat } from '@/services/types';
 import { useResponsive } from '@/hooks/useResponsive';
 import { buildDstFile } from '@/utils/dstWriter';
+import { exportViaBackend, type BackendFormat } from '@/services/digitizing/backendClient';
 
 const FORMATS: StitchFormat[] = ['DST', 'PES', 'JEF', 'EXP', 'VP3', 'HUS'];
 
+// Formats the real backend (pyembroidery) can encode. HUS has no
+// pyembroidery writer yet, so it stays unavailable either way.
+const BACKEND_FORMATS: Partial<Record<StitchFormat, BackendFormat>> = {
+  DST: 'dst',
+  PES: 'pes',
+  JEF: 'jef',
+  EXP: 'exp',
+  VP3: 'vp3',
+};
+
 export default function DigitizeSuccessScreen() {
   const router = useRouter();
-  const { artwork, settings, stitchPlan, dstPoints, reset } = useDigitizeWizard();
+  const { artwork, settings, stitchPlan, dstPoints, threadColors, reset } = useDigitizeWizard();
   const { show } = useToast();
   const { isMobile } = useResponsive();
   const savedRef = useRef(false);
   const [saved, setSaved] = useState(false);
+  const [downloadingFormat, setDownloadingFormat] = useState<StitchFormat | null>(null);
 
   useEffect(() => {
     if (!artwork || !stitchPlan) {
@@ -49,27 +61,59 @@ export default function DigitizeSuccessScreen() {
 
   const artworkSource = { uri: artwork.uri };
 
-  const handleDownload = (format: StitchFormat) => {
-    if (format !== 'DST') {
-      show(`${format} isn't wired up yet — DST is the real, downloadable format for now (works on virtually every machine).`, 'info');
-      return;
-    }
+  const triggerBlobDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownload = async (format: StitchFormat) => {
     if (!dstPoints || dstPoints.length === 0) {
       show("Couldn't generate a real stitch file for this design — try again from Settings.", 'error');
       return;
     }
+    const baseName = artwork.name.replace(/\.[^/.]+$/, '') || 'design';
+    const backendFormat = BACKEND_FORMATS[format];
+
+    // Formats beyond DST need the real backend (pyembroidery) to encode —
+    // pure client-side JS only implements the DST binary format. Try the
+    // backend first for every supported format (it's also a more
+    // authoritative encoder for DST itself); fall back to the client-side
+    // writer for DST only if the backend is unreachable/unconfigured.
+    if (backendFormat) {
+      setDownloadingFormat(format);
+      try {
+        const blob = await exportViaBackend(dstPoints, threadColors, backendFormat, baseName);
+        if (blob) {
+          triggerBlobDownload(blob, `${baseName}.${backendFormat}`);
+          show(`${baseName}.${backendFormat} downloaded — a real, machine-readable file from the StitchPro engine.`, 'success');
+          return;
+        }
+      } finally {
+        setDownloadingFormat(null);
+      }
+    }
+
+    if (format !== 'DST') {
+      show(
+        `Couldn't reach the StitchPro backend to generate a real ${format} file right now — DST (works on virtually every machine) is still available below.`,
+        'info'
+      );
+      return;
+    }
+
+    // DST-only client-side fallback, so exports keep working with zero
+    // backend configured/reachable.
     try {
       const bytes = buildDstFile(dstPoints, { name: artwork.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 16) || 'STITCHPRO' });
       const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${artwork.name.replace(/\.[^/.]+$/, '') || 'design'}.dst`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      show(`${artwork.name}.dst downloaded — a real, machine-readable Tajima DST file.`, 'success');
+      triggerBlobDownload(blob, `${baseName}.dst`);
+      show(`${baseName}.dst downloaded — a real, machine-readable Tajima DST file.`, 'success');
     } catch {
       show('Something went wrong generating the DST file.', 'error');
     }
@@ -117,7 +161,12 @@ export default function DigitizeSuccessScreen() {
           <Pressable
             key={format}
             onPress={() => handleDownload(format)}
-            style={[styles.formatChip, i === 0 && styles.formatChipPrimary]}
+            disabled={downloadingFormat !== null}
+            style={[
+              styles.formatChip,
+              i === 0 && styles.formatChipPrimary,
+              downloadingFormat !== null && downloadingFormat !== format && styles.formatChipDisabled,
+            ]}
           >
             <Download size={15} color={i === 0 ? colors.white : colors.indigo} />
             <Text
@@ -126,7 +175,7 @@ export default function DigitizeSuccessScreen() {
                 { color: i === 0 ? colors.white : colors.indigo, fontFamily: typography.bodyMedium.fontFamily },
               ]}
             >
-              {format}
+              {downloadingFormat === format ? 'Working…' : format}
             </Text>
           </Pressable>
         ))}
@@ -218,6 +267,9 @@ const styles = StyleSheet.create({
   },
   formatChipPrimary: {
     backgroundColor: colors.indigo,
+  },
+  formatChipDisabled: {
+    opacity: 0.45,
   },
   actionsRow: {
     flexDirection: 'row',
