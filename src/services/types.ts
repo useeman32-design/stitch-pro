@@ -34,6 +34,15 @@ export interface User {
   creditsTotal: number;
 }
 
+export interface UserPreferences {
+  defaultFormat: StitchFormat;
+  defaultHoop: string;
+  unit: 'mm' | 'in';
+  notifyJobs: boolean;
+  notifyDesigns: boolean;
+  notifyWeekly: boolean;
+}
+
 export interface ActivityItem {
   id: string;
   type: 'download' | 'create' | 'edit' | 'export';

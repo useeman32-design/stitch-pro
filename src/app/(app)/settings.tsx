@@ -43,11 +43,30 @@ export default function SettingsScreen() {
       setName(u.name);
       setEmail(u.email);
     });
+    authService.getPreferences().then((prefs) => {
+      setFormat(prefs.defaultFormat);
+      setHoop(prefs.defaultHoop);
+      setUnit(prefs.unit);
+      setNotifyJobs(prefs.notifyJobs);
+      setNotifyDesigns(prefs.notifyDesigns);
+      setNotifyWeekly(prefs.notifyWeekly);
+    });
   }, []);
 
   const handleSave = async () => {
     setSaving(true);
-    await new Promise((r) => setTimeout(r, 400));
+    const [updatedUser] = await Promise.all([
+      authService.updateProfile({ name, email }),
+      authService.updatePreferences({
+        defaultFormat: format,
+        defaultHoop: hoop,
+        unit,
+        notifyJobs,
+        notifyDesigns,
+        notifyWeekly,
+      }),
+    ]);
+    setUser(updatedUser);
     setSaving(false);
     show('Settings saved.', 'success');
   };
