@@ -1,11 +1,23 @@
 /**
- * Machines service — mock implementation.
- * Used by the Machine Center.
+ * Machines service — real local persistence on top of a hardcoded seed
+ * fleet. Used by the Machine Center. See designs/index.ts's docstring for
+ * why this pattern exists (previously everything reverted on refresh).
  */
 
 import type { Machine } from '../types';
+import { localStore } from '../storage/localStore';
+import {
+  addCreatedMachine,
+  emptyMachinesState,
+  mergeMachines,
+  removeMachineFromState,
+  setMachineStatusInState,
+  type MachinesPersistedState,
+} from './mergeMachines';
 
-const mockMachines: Machine[] = [
+const STATE_KEY = 'machines.state.v1';
+
+const seedMachines: Machine[] = [
   {
     id: 'mch_ricoma',
     name: 'Ricoma MT-1501',
@@ -47,13 +59,25 @@ function delay<T>(value: T, ms = 300): Promise<T> {
 
 let nextMachineSeq = 1;
 
+async function loadState(): Promise<MachinesPersistedState> {
+  return localStore.get<MachinesPersistedState>(STATE_KEY, emptyMachinesState());
+}
+
+async function saveState(state: MachinesPersistedState): Promise<void> {
+  await localStore.set(STATE_KEY, state);
+}
+
 export const machinesService = {
   async list(): Promise<Machine[]> {
-    return delay(mockMachines);
+    const state = await loadState();
+    return delay(mergeMachines(seedMachines, state));
   },
+
   async get(id: string): Promise<Machine | undefined> {
-    return delay(mockMachines.find((m) => m.id === id));
+    const state = await loadState();
+    return delay(mergeMachines(seedMachines, state).find((m) => m.id === id));
   },
+
   async create(input: {
     name: string;
     brand: string;
@@ -63,7 +87,7 @@ export const machinesService = {
     needleCount?: number;
   }): Promise<Machine> {
     const machine: Machine = {
-      id: `mch_new_${nextMachineSeq++}`,
+      id: `mch_new_${Date.now()}_${nextMachineSeq++}`,
       name: input.name,
       brand: input.brand,
       model: input.model,
@@ -72,17 +96,24 @@ export const machinesService = {
       hoopSizes: input.hoopSizes,
       needleCount: input.needleCount,
     };
-    mockMachines.push(machine);
+    const state = await loadState();
+    await saveState(addCreatedMachine(state, machine));
     return delay(machine, 250);
   },
+
   async toggleStatus(id: string): Promise<Machine | undefined> {
-    const machine = mockMachines.find((m) => m.id === id);
-    if (machine) machine.status = machine.status === 'active' ? 'offline' : 'active';
-    return delay(machine, 200);
+    const state = await loadState();
+    const current = mergeMachines(seedMachines, state).find((m) => m.id === id);
+    if (!current) return delay(undefined, 200);
+    const nextStatus = current.status === 'active' ? 'offline' : 'active';
+    const isCreated = state.created.some((m) => m.id === id);
+    await saveState(setMachineStatusInState(state, id, isCreated, nextStatus));
+    return delay({ ...current, status: nextStatus }, 200);
   },
+
   async remove(id: string): Promise<void> {
-    const idx = mockMachines.findIndex((m) => m.id === id);
-    if (idx >= 0) mockMachines.splice(idx, 1);
+    const state = await loadState();
+    await saveState(removeMachineFromState(state, id));
     return delay(undefined, 200);
   },
 };

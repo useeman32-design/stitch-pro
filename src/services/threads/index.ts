@@ -1,11 +1,21 @@
 /**
- * Threads service — mock implementation.
- * Used by the Thread Library.
+ * Threads service — real local persistence on top of a hardcoded seed
+ * library. Used by the Thread Library. See designs/index.ts's docstring
+ * for why this pattern exists (previously everything reverted on refresh).
  */
 
 import type { ThreadColor } from '../types';
+import { localStore } from '../storage/localStore';
+import {
+  addCreatedThread,
+  emptyThreadsState,
+  mergeThreads,
+  type ThreadsPersistedState,
+} from './mergeThreads';
 
-const mockThreads: ThreadColor[] = [
+const STATE_KEY = 'threads.state.v1';
+
+const seedThreads: ThreadColor[] = [
   { id: 'thr_1', brand: 'Madeira', code: '1147', name: 'Indigo Blue', hex: '#5B4FE8' },
   { id: 'thr_2', brand: 'Madeira', code: '1000', name: 'White', hex: '#FFFFFF' },
   { id: 'thr_3', brand: 'Isacord', code: '0900', name: 'Black', hex: '#181B26' },
@@ -34,19 +44,35 @@ function delay<T>(value: T, ms = 300): Promise<T> {
 
 let nextThreadSeq = 1;
 
+async function loadState(): Promise<ThreadsPersistedState> {
+  return localStore.get<ThreadsPersistedState>(STATE_KEY, emptyThreadsState());
+}
+
+async function saveState(state: ThreadsPersistedState): Promise<void> {
+  await localStore.set(STATE_KEY, state);
+}
+
 export const threadsService = {
   async list(): Promise<ThreadColor[]> {
-    return delay(mockThreads);
+    const state = await loadState();
+    return delay(mergeThreads(seedThreads, state));
   },
-  async create(input: { brand: string; code: string; name: string; hex: string }): Promise<ThreadColor> {
+
+  async create(input: {
+    brand: string;
+    code: string;
+    name: string;
+    hex: string;
+  }): Promise<ThreadColor> {
     const thread: ThreadColor = {
-      id: `thr_new_${nextThreadSeq++}`,
+      id: `thr_new_${Date.now()}_${nextThreadSeq++}`,
       brand: input.brand,
       code: input.code,
       name: input.name,
       hex: input.hex,
     };
-    mockThreads.unshift(thread);
+    const state = await loadState();
+    await saveState(addCreatedThread(state, thread));
     return delay(thread, 200);
   },
 };
