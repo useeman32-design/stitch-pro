@@ -416,8 +416,12 @@ not a raw `page.goto()` to a non-root `.html` file.**
   satin (`1ddc364`), fill/tatami (`c945e9a`), combined routing (`7df5cf6`),
   real server-side image digitizing / PNG → segmentation → objects
   (`b6331e1`). Plus a quality pass (fill holes, underlay, arc-length satin
-  curves — `b76ccf3`) and the cross-platform JSON points-preview endpoint
-  (`e615e3e`). **98/98 tests passing** as of `6e11c02` (latest).
+  curves — `b76ccf3`), the cross-platform JSON points-preview endpoint
+  (`e615e3e`), an earlier narrower color-quantization fix (`6e11c02`, now
+  superseded — see below), and a substantial follow-up pass (`6ab041b`,
+  latest) covering real-photo background removal, curve smoothing,
+  cross-stitch, and solid-fill fixes (see next bullet). **139/139 tests
+  passing** as of `6ab041b`.
 - **API surface (current, real)**:
   - `GET /api/health`, `GET /api/formats`.
   - `POST /api/design/line-to-dst` — legacy Milestone-1 endpoint, unused by
@@ -426,21 +430,67 @@ not a raw `page.goto()` to a non-root `.html` file.**
     `DstPoint[]`-style stream into a real DST/PES/JEF/VP3/EXP file. This is
     what the frontend's export/download flow actually calls.
   - `POST /api/design/image-to-file` — Milestone 5: real image → digitize →
-    file, for server-side digitizing of a raw uploaded image.
+    file, for server-side digitizing of a raw uploaded image. Now also
+    accepts `stitch_style` (`"fill"` default, or `"cross"` for a cross-
+    stitch grid), `angle_deg`, and `smooth_curves` (bool, default true);
+    `density_mm` is now optional and defaults to a style-appropriate value
+    (0.4mm fill rows, 1.8mm cross-stitch cells) if omitted.
   - `POST /api/design/image-to-points` — same digitizing pipeline as
-    image-to-file, but returns the JSON point-stream contract instead of a
-    binary file, for client-side *preview* rendering (web + native alike).
-    This is what `useStitchPreview.ts` calls.
+    image-to-file (same new fields above), but returns the JSON
+    point-stream contract instead of a binary file, for client-side
+    *preview* rendering (web + native alike). This is what
+    `useStitchPreview.ts` calls.
   - CORS wide open (`*`) — tighten once there's real auth/session state.
-- **Fixed this session**: a real quantization bug (`6e11c02`) where
-  `build_label_grid` ran MEDIANCUT over the whole downscaled image
-  including the near-background anti-aliased halo around every shape,
-  which could waste a small `max_colors` budget entirely and collapse
-  genuinely distinct foreground colors into one muddy average (reproduced:
-  a 2-color navy/gold badge → 1 detected color). Fixed by classifying
-  background pixels first (unchanged rule), then quantizing only the
-  foreground pixel multiset. See §5 for the remaining, not-fixed, milder
-  imbalanced-color-count limitation.
+- **Fixed in `6ab041b` (latest, addresses direct user feedback from local
+  testing of the Google-logo case)**:
+  - **Real-photo background/material removal**: `digitizer/segmentation/
+    background_removal.py` (new) replaces the old single-global-background-
+    color-distance test with a three-pass approach: (1) a border-connected
+    flood fill that's tolerant of *local* gradual color change (shirt
+    lighting/shading across a real photo), (2) a tunnel-rejection pass that
+    catches and reverses cases where that flood fill "tunneled" through a
+    multi-pixel anti-aliased blend band into a solid differently-colored
+    foreground region (found via real testing — a blue badge on a gradient
+    background was getting incorrectly erased as background), (3) an
+    enclosed-hole pass (unchanged behavior from before — a letter "O"'s
+    counter still correctly becomes a hole, not its own foreground region).
+  - **Curve smoothing**: `digitizer/geometry/smoothing.py` (new) — adaptive,
+    corner-preserving Chaikin smoothing wired into `digitizer/segmentation/
+    polygons.py` after the existing Douglas-Peucker simplify. Shallow-turn
+    vertices (an approximated curve) get corner-cut; sharp, intentional
+    corners are left untouched.
+  - **Cross-stitch**: `digitizer/stitches/cross/generator.py` (new),
+    `ObjectType.CROSS_STITCH`, dispatch wiring, and `pipeline.py`'s new
+    `stitch_style` parameter (`"fill"` | `"cross"`, applies to the whole
+    design — per-region auto-classification is a future follow-up, not
+    implemented).
+  - **Solid-fill fix** (the literal "fill isn't fully solid, generates
+    lines that don't fill it" complaint): two root causes found and fixed.
+    (a) `color_quantize.py`'s MEDIANCUT sometimes allocated a second,
+    near-identical palette entry for a solid color's anti-aliased edge
+    pixels instead of folding them into the same bucket — fragmenting one
+    clean region into two differently-"colored" (but visually identical)
+    objects with a seam between them; fixed with a new
+    `_merge_near_duplicate_colors` dedup pass. (b) `polygons.py`'s
+    `label_grid_to_ring_groups` gained a `min_bbox_mm` filter (checked on
+    the *shorter* bounding-box side, not area) to discard thin, hair-width
+    slivers that survive the existing `min_area_px` filter but were never a
+    real stitchable design feature.
+  - **Verified end-to-end** against a real Google "G" logo PNG (both as a
+    plain transparent PNG and composited onto a synthetic noisy/gradient
+    "shirt" background): both now produce exactly 4 clean single-object
+    regions matching the logo's 4 real colors, with no background bleed-
+    through and no fragmentation.
+  - 41 new tests across `test_background_removal.py`, `test_smoothing.py`,
+    `test_cross_stitch.py`, `test_api.py` (new — first direct Flask-
+    test-client coverage of `api/app.py`), plus additions to
+    `test_pipeline.py`/`test_segmentation.py`.
+  - **Not yet done from this same feature request**: (1) frontend wiring —
+    no UI yet for selecting `stitch_style`/`angle_deg`/`smooth_curves`
+    (Auto-Digitize settings screen not touched this session); (2) the
+    Simulator's "real 3D threaded look" ask (point 3 of the user's request)
+    — still just the existing embossed-canvas look, not yet revisited for
+    a more realistic raised-thread render.
 - **Hosting**: cPanel "Setup Python App" (Passenger/WSGI) confirmed
   available on the user's plan, but **nothing has been deployed there
   yet** — the agent has no cPanel credentials. The backend has only ever
@@ -456,31 +506,44 @@ not a raw `page.goto()` to a non-root `.html` file.**
 
 ## 8. Suggested next steps (pick up here)
 
-1. **Deploy `stitchpro-backend` somewhere persistent** (ideally the user's
+1. **Frontend wiring for the new backend capabilities (`6ab041b`)** — no UI
+   yet exposes `stitch_style` ("fill"/"cross"), `angle_deg`, or
+   `smooth_curves` to the user. Likely the Auto-Digitize settings screen
+   (not yet located/read this session) needs a stitch-style picker at
+   minimum; wire it through `backendClient.ts`'s request params.
+2. **Simulator "real 3D threaded" look** — still outstanding from the same
+   user request that drove `6ab041b`. The user wants the preview to look
+   like actual raised thread/stitching, "not just lines", building further
+   on the already-shipped embossed-canvas work
+   (`EmbossedStitchCanvas.tsx`/`stitchPreview.ts`, not read/touched this
+   session — read those first before changing anything).
+3. **Deploy `stitchpro-backend` somewhere persistent** (ideally the user's
    cPanel hosting) and update `DEFAULT_BACKEND_URL` in
    `src/services/digitizing/backendClient.ts`, then rebuild + redeploy the
-   frontend. This is the highest-leverage remaining task — it's the one
-   thing that turns "real digitizing works when I manually point the app
-   at a sandbox" into "real digitizing works for actual users". Needs a
-   human with cPanel access; ask the user to walk through their panel, or
-   for credentials, when this is picked up.
-2. If the user reports the bottom nav or embossed preview rendering is
+   frontend. This is still the single highest-leverage remaining gap — it's
+   the one thing that turns "real digitizing works when I manually point
+   the app at a sandbox" into "real digitizing works for actual users".
+   Needs a human with cPanel access; ask the user to walk through their
+   panel, or for credentials, when this is picked up.
+4. If the user reports the bottom nav or embossed preview rendering is
    broken on a real device, get a screenshot + exact browser/device before
    guessing at CSS/layout fixes — see §5's lessons.
-3. Local Windows reproduction of the dev environment was previously
+5. Local Windows reproduction of the dev environment was previously
    paused, blocked by an unresolved Expo Go sign-in error (not revisited
    this session — may still be an open thread with the user).
-4. The color-quantization imbalanced-pixel-count limitation (§5/§7) is a
-   nice-to-have improvement (weighted/k-means quantizer) if better
-   multi-color digitizing accuracy becomes a priority.
-5. Persistence (§6) currently only covers this device/browser's local
+6. Per-region automatic stitch-style classification (e.g. auto-detecting a
+   thin/elongated region and digitizing it as SATIN, or auto-choosing
+   cross-stitch only for regions that look pixelated) is a known, not-yet-
+   implemented follow-up — `stitch_style` today applies to the whole design
+   at once, chosen by the caller.
+7. Persistence (§6) currently only covers this device/browser's local
    storage — there is still no real backend database or multi-device sync.
    If the user wants designs/jobs to follow them across devices or wants
    a real login system, that's a genuinely new, large feature (real
    backend auth + a database), not a quick follow-up — confirm scope with
    the user before starting it rather than assuming.
-6. Always re-run the full verification loop before calling anything done:
-   `cd stitchpro-backend && venv/bin/python3 -m pytest -q` (expect 98/98+),
-   `cd stitch-pro && npx tsc --noEmit` (expect clean), `node
+8. Always re-run the full verification loop before calling anything done:
+   `cd stitchpro-backend && venv/bin/python3 -m pytest -q` (expect
+   139/139+), `cd stitch-pro && npx tsc --noEmit` (expect clean), `node
    scripts/test-merge-*.mjs` for each (expect all green), `npx expo export
    -p web` (expect no errors), then a live-browser smoke check per §4.
