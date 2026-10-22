@@ -1,128 +1,140 @@
 # StitchPro — Handoff / Continuation Notes
 
-_Last updated: 2026-09-29. Written for a fresh AI agent picking this project up in a
-new chat/session. Read this whole file before doing anything._
+_Last updated: 2026-10-22 (overnight autonomous session, while the user slept).
+Written for a fresh AI agent picking this project up in a new chat/session.
+Read this whole file before doing anything — it supersedes the 2026-09-29
+version of this file (kept below in spirit, not literally; a lot has changed)._
 
-If you're an agent reading this: the user will clone this repo and ask you to read
-this file to get up to speed. Assume you have **no prior memory** of this project.
-Everything you need to keep working productively is below.
+If you're an agent reading this: the user will say something like "pull
+updates and test" after waking up. Assume you have **no prior memory** of
+this project. Everything you need to keep working productively is below.
 
 ---
 
 ## 1. What this project is
 
-**StitchPro** is a commercial embroidery-digitizing SaaS product: users upload
-artwork, the app converts it into real embroidery machine stitch files (DST format
-first, more formats later), and lets them manage designs, production jobs, machines,
-thread inventory, etc. It's built as two separate repos:
+**StitchPro** is a commercial embroidery-digitizing SaaS product: users
+upload artwork, the app converts it into real embroidery machine stitch
+files (DST/PES/JEF/EXP/VP3), and lets them manage designs, production jobs,
+machines, thread inventory, etc. Two separate repos:
 
 | Repo | Purpose | URL |
 |---|---|---|
-| `stitch-pro` | Frontend — Expo/React Native app (this repo, exports to web + will target iOS/Android) | `https://github.com/useeman32-design/stitch-pro` |
+| `stitch-pro` | Frontend — Expo/React Native app (this repo), exports to web, targets iOS/Android too | `https://github.com/useeman32-design/stitch-pro` |
 | `stitchpro-backend` | Backend — Python/Flask embroidery digitizing engine | `https://github.com/useeman32-design/stitchpro-backend` |
 
-Both belong to the user's real GitHub account (`useeman32-design`). The frontend is
-also deployed as a live static web build via GitHub Pages:
+Live web build: **`https://useeman32-design.github.io/stitch-pro/`** (GitHub
+Pages, `gh-pages` branch). Both repos belong to the user's real GitHub
+account (`useeman32-design`).
 
-**Live URL: `https://useeman32-design.github.io/stitch-pro/`** (served from the
-`gh-pages` branch, root path `/`).
-
-The user's environment: they are non-technical-ish (communicates in plain language,
-doesn't want to run terminal commands themselves) and expects the agent to build,
-verify, and deploy changes for them, then just tell them to check the live URL.
+The user is non-technical-ish, communicates in plain language, and expects
+the agent to build/verify/deploy changes, then just say "check the live
+URL" or "pull and test".
 
 ---
 
-## 2. Standing instructions from the user — do these without being asked
+## 2. Standing instructions — do these without being asked
 
-1. **Auto-push after every meaningful change.** The user explicitly said: "anytime
-   you finished an update can push it directly." Don't wait to be asked — after any
-   real code change, commit + push to `main` on the relevant repo(s), and if it's a
-   frontend change, also rebuild and redeploy to GitHub Pages (see §4). Tell the user
-   afterward what you did and give them the live URL to check.
-2. **Never ask the user to resend the GitHub token.** It's already stored on disk
-   (see §3). Only ask again if that file is confirmed missing/invalid.
-3. **Never echo the raw token value in a chat reply.** It's fine that it appears in
-   a tool's own stdout/logs during a deploy — just don't repeat it in your written
-   response to the user.
-4. The user is on Lagos/Nigeria network conditions and has repeatedly reported
-   "still seeing the old version" after deploys that check out fine server-side —
-   see §5 (Known pitfalls) before assuming a deploy is confirmed good. Prefer to
-   verify with a real headless-browser load against the live URL, not just header/
-   hash comparisons, and always give the user a cache-busting URL
-   (`?nocache=<random>`) to test with, since GitHub Pages' CDN (Fastly) caches
-   per-edge-region for up to 10 minutes and browsers cache the HTML too.
+1. **Auto-push after every meaningful change**, to the relevant repo's
+   `main`. If it's a frontend change, **also rebuild and redeploy to GitHub
+   Pages** (see §4) — don't wait to be asked.
+2. **Never ask the user to resend the GitHub token.** It's on disk (§3).
+3. **Never echo the raw token value in a chat reply.**
+4. Give a cache-busting URL (`?nocache=<random>`) when pointing the user at
+   the live site — GitHub Pages' CDN caches per edge region for ~10 min.
+5. Use `git commit -F <tmpfile>` for multi-line commit messages, **not**
+   `git commit -m "..."` with a message containing backticks — backticks
+   inside a double-quoted `-m` string get shell-expanded as command
+   substitution and silently corrupt/abort the commit. (Hit this exact bug
+   this session; caught it because the commit didn't appear in `git log`.)
 
 ---
 
-## 3. Credentials & environment quirks (READ THIS BEFORE TRYING TO PUSH ANYTHING)
+## 3. Credentials & environment quirks (READ BEFORE PUSHING ANYTHING)
 
-### If you are running in the same kind of sandboxed agent environment as before
-(Arena.ai Agent Mode, an ephemeral Linux sandbox rooted at `/home/user`), the
-following **are wiped between conversation turns and must be redone every time
-you need them**, even if they worked earlier in the same session:
+This is an ephemeral Arena.ai Agent Mode sandbox rooted at `/home/user`.
+**These are wiped between conversation turns/snapshot restores and must be
+redone every time, even if they worked earlier in the same session:**
 
-- `git remote` entries (`.git/config`) — every turn that needs to push must
-  re-add `origin` with an embedded token before pushing.
-- `node_modules` in both repos — must run `npm install` fresh.
-- Any pip-installed tools (e.g. `playwright` + its downloaded Chromium) — must
-  reinstall (`pip install playwright && python3 -m playwright install --with-deps
-  chromium`) each time before using them.
+- `git remote` entries (`.git/config`) — re-add `origin` with an embedded
+  token before every push.
+- `node_modules` in both repos — `npm install` fresh.
+- **Node version**: the sandbox's default `node` is v20.20.2, but
+  `react-native@0.88`/`metro-transform-worker@0.87` (from the SDK 58
+  upgrade) require Node `^22.13 || ^24.3 || >=26`. `~/.nvm` does **not**
+  survive a snapshot restore either — if `nvm: command not found` or
+  `EBADENGINE` warnings show up, reinstall it:
+  ```bash
+  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+  export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm install 22
+  ```
+  then `nvm use 22` before any `npm install`/`npx expo`/`npx tsc` command.
+  `start_expo.sh` already does the `nvm use 22` part, just not the install.
+- **Python venvs** (`stitchpro-backend/venv`): the `venv/bin/python3`
+  *binary* (a symlink to the system interpreter) can go missing after a
+  snapshot restore even though `venv/lib/.../site-packages` is intact,
+  causing `ModuleNotFoundError: flask` even though flask shows as
+  installed. Don't try to repair it — just rebuild:
+  ```bash
+  cd stitchpro-backend && rm -rf venv && python3 -m venv venv && venv/bin/pip install -r requirements.txt
+  ```
+- Playwright + its Chromium download (used for live-site verification) —
+  reinstall each session: `pip install playwright && python3 -m playwright
+  install --with-deps chromium`.
 - The `gh-pages` npm package's local clone cache at
-  `stitch-pro/node_modules/.cache/gh-pages/` — gets wiped along with
-  `node_modules`, so it's always a fresh clone; no special handling needed, just
-  don't assume it has any state from a previous turn.
+  `stitch-pro/node_modules/.cache/gh-pages/` — always wiped with
+  `node_modules`; no special handling needed.
 
-**Regular tracked files and anything else under `/home/user` DO persist** across
-turns (including this repo's git history/commits, and files outside the repos like
-the credentials file below).
+**Regular tracked git files and anything else under `/home/user` DO
+persist** across turns (commit history, files outside the repos, etc).
 
 ### Where the GitHub token lives
 
-There is a file **outside both git repos** (never committed, already gitignored):
-
-```
-/home/user/.stitchpro-deploy.json
-```
-
-Structure:
+`/home/user/.stitchpro-deploy.json` (outside both repos, gitignored):
 ```json
 {
   "github_token": "ghp_...",
   "repos": {
-    "stitch-pro": {
-      "path": "/home/user/stitch-pro",
-      "url": "https://github.com/useeman32-design/stitch-pro.git",
-      "default_branch": "main",
-      "pages_branch": "gh-pages"
-    },
-    "stitchpro-backend": {
-      "path": "/home/user/stitchpro-backend",
-      "url": "https://github.com/useeman32-design/stitchpro-backend.git",
-      "default_branch": "main"
-    }
+    "stitch-pro": { "path": "/home/user/stitch-pro", "url": "https://github.com/useeman32-design/stitch-pro.git", "default_branch": "main", "pages_branch": "gh-pages" },
+    "stitchpro-backend": { "path": "/home/user/stitchpro-backend", "url": "https://github.com/useeman32-design/stitchpro-backend.git", "default_branch": "main" }
   }
 }
 ```
+If it exists and has a valid token, use it — don't ask the user to resend.
+If missing entirely, ask for a new PAT and recreate this file.
 
-**If this file exists and has a valid token, use it — do not ask the user to send
-the token again.** If it's missing (e.g. you're in a brand new environment that
-never had it, like a different machine after the user "clones the repo" somewhere
-else entirely), ask the user for a GitHub Personal Access Token with repo access,
-then recreate this file yourself (chmod 600, outside the repo, add its path to
-`.gitignore` if not already) so you don't have to ask again mid-session.
-
-### Standard push pattern (do this at the start of any turn that needs to push)
+### Standard push pattern
 
 ```bash
 cd /home/user/stitch-pro   # or stitchpro-backend
 TOKEN=$(python3 -c "import json; print(json.load(open('/home/user/.stitchpro-deploy.json'))['github_token'])")
 REPO_URL=$(python3 -c "import json; print(json.load(open('/home/user/.stitchpro-deploy.json'))['repos']['stitch-pro']['url'])")
 AUTHED_URL=$(echo "$REPO_URL" | sed -E "s#https://#https://x-access-token:${TOKEN}@#")
-git remote add origin "$AUTHED_URL" 2>/dev/null || git remote set-url origin "$AUTHED_URL"
+git remote remove origin 2>/dev/null; git remote add origin "$AUTHED_URL"
+git fetch origin main   # ALWAYS do this before pushing -- see the IMPORTANT note below
 git push origin main
-git remote set-url origin "$REPO_URL"   # scrub the token back out afterward (defense in depth)
+git remote set-url origin "$REPO_URL"   # scrub the token back out afterward
 ```
+
+**IMPORTANT — check for remote/local drift before assuming "uncommitted
+changes" are actually uncommitted.** This exact session hit a case where
+the working tree had real, uncommitted-looking changes that turned out to
+already be pushed to `origin/main` under a *later* commit than local HEAD
+(a snapshot-restore artifact: the working tree files were current, but the
+local `.git` history had rewound). Before building on top of what looks
+like uncommitted work, always `git fetch origin <branch>` and diff:
+```bash
+git log --oneline HEAD..origin/main   # is origin ahead of local HEAD?
+git add -A && git diff --cached origin/main --stat   # is the working tree already == origin?
+```
+If the working tree already matches `origin/main` exactly (or differs only
+by files you can cleanly re-derive), `git reset --hard origin/main` to
+resync, then reapply only the genuinely new work as a fresh commit. **Don't
+`git reset --hard` with anything valuable only staged and not committed —
+it discards staged-but-uncommitted new files along with tracked-file
+changes.** (If that happens, the blob may still be recoverable via `git
+fsck --unreachable | grep blob` + `git cat-file blob <sha> > path`, which
+is how an accidentally-reset PNG was recovered this session.)
 
 ---
 
@@ -130,282 +142,296 @@ git remote set-url origin "$REPO_URL"   # scrub the token back out afterward (de
 
 ### ⚠️ Critical bug already found and fixed — do not reintroduce it
 
-The `gh-pages` npm package's CLI flags are easy to get wrong:
-
-- `-d, --dist <dir>` = the local build folder to publish (e.g. `dist`)
-- `-b, --branch <branch>` = which branch to push to (defaults to `gh-pages` already)
-- `-e, --dest <dir>` = a **subdirectory within the target branch** to publish into —
-  **this is NOT the branch name**, despite how it reads.
-
-An earlier version of this project's `package.json` deploy script used `-e gh-pages`
-thinking it selected the branch. It actually made every deploy silently publish into
-an unused `<branch-root>/gh-pages/` subfolder, while the actual served root kept
-whatever was there from before that mistake — so the live site looked permanently
-stale no matter how many times a "successful" deploy ran. This was hard to catch
-because file hashes/timestamps on the (wrong, nested) files matched the local build
-perfectly; only a real functional browser test against the live root URL exposed it.
-
-**The fix is already applied** in `package.json`:
+`gh-pages`'s `-e/--dest` flag is a **subdirectory within the target
+branch**, not the branch name. The fixed, correct deploy script in
+`package.json`:
 ```json
 "deploy": "gh-pages --nojekyll --dotfiles -d dist -b gh-pages"
 ```
-If you ever see `-e gh-pages` (or `-e` with any branch-sounding value) in a deploy
-command anywhere, that's the bug — fix it to `-b gh-pages` and drop `-e` entirely
-(it correctly defaults to the branch root, `.`).
+If you ever see `-e gh-pages` (or `-e` with any branch-sounding value)
+anywhere, that's the old bug — use `-b gh-pages` and drop `-e`.
 
 ### Standard deploy procedure
 
 ```bash
 cd /home/user/stitch-pro
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 22
 npm install --no-audit --no-fund
-rm -rf dist
-npx expo export -p web
-# (optional but recommended) sanity-check the fresh bundle contains your change:
-grep -c "some distinctive string from your change" dist/_expo/static/js/web/entry-*.js
+rm -rf dist && npx expo export -p web
 
-# get token/url as in §3, then:
-rm -rf node_modules/.cache/gh-pages   # force a clean clone, avoid any stale-cache surprises
+TOKEN=$(python3 -c "import json; print(json.load(open('/home/user/.stitchpro-deploy.json'))['github_token'])")
+REPO_URL=$(python3 -c "import json; print(json.load(open('/home/user/.stitchpro-deploy.json'))['repos']['stitch-pro']['url'])")
+AUTHED_URL=$(echo "$REPO_URL" | sed -E "s#https://#https://x-access-token:${TOKEN}@#")
+rm -rf node_modules/.cache/gh-pages
 npx gh-pages --nojekyll --dotfiles -d /home/user/stitch-pro/dist -b gh-pages -r "$AUTHED_URL"
 ```
 
-### Verifying a deploy actually worked (do all of these, not just one)
+### Verifying a deploy actually worked
 
-1. **Confirm via GitHub's API** (not `raw.githubusercontent.com`, which can lag)
-   that the `gh-pages` branch's `index.html` references the same JS entry hash as
-   your fresh local `dist/index.html`:
-   ```bash
-   curl -s -H "Authorization: token $TOKEN" \
-     "https://api.github.com/repos/useeman32-design/stitch-pro/contents/index.html?ref=gh-pages" \
-     | python3 -c "import json,sys,base64,re; d=json.load(sys.stdin); print(re.findall(r'_expo/static/js/web/entry-[a-z0-9]+\.js', base64.b64decode(d['content']).decode()))"
-   ```
-2. **Then actually load the live URL with a real headless browser** (Playwright) and
-   confirm the change is visually/functionally there. Hash-matching alone was proven
-   insufficient once already in this project (see §5) — always do the live check too.
-3. Give the user a cache-busting link, e.g. `https://useeman32-design.github.io/stitch-pro/?nocache=12345`,
-   since GitHub Pages' CDN (Fastly) caches HTML responses (`Cache-Control: max-age=600`)
-   **per edge region** — the user (Lagos) may hit a different, still-stale edge than
-   whatever region your own checks hit, even minutes after a real fix landed.
+1. Compare the `gh-pages` branch's `index.html` JS entry hash (via GitHub's
+   API, not `raw.githubusercontent.com`) against the fresh local
+   `dist/index.html`'s hash — see the `curl .../contents/index.html`
+   snippet in earlier revisions of this file, still valid.
+2. Load the **live** URL with a real headless browser (Playwright) and
+   click through a real flow. Hash-matching alone has been proven
+   insufficient once already in this project's history.
+3. Give the user a cache-busting link
+   (`https://useeman32-design.github.io/stitch-pro/?nocache=12345`).
 
 ### Local preview before deploying (recommended)
 
-The app is built with a GitHub Pages sub-path base URL (`app.json` →
-`expo.experiments.baseUrl = "/stitch-pro"`), so if you want to preview the static
-export locally before deploying, you must serve it under that same sub-path or
-asset URLs will 404:
-
+The app uses a GH-Pages sub-path base URL (`app.json` →
+`expo.experiments.baseUrl = "/stitch-pro"`). To preview locally:
 ```bash
-mkdir -p /tmp/pages_root/stitch-pro
-cp -r dist/* /tmp/pages_root/stitch-pro/
-python3 -m http.server 8090 --directory /tmp/pages_root
-# then browse to http://localhost:8090/stitch-pro/
+mkdir -p /tmp/pages_root/stitch-pro && cp -r dist/* /tmp/pages_root/stitch-pro/
+python3 -m http.server 8090 --directory /tmp/pages_root   # use start_process, not bare `&`-backgrounded bash
+# browse http://localhost:8090/stitch-pro/
 ```
-(Running the normal `expo start --web` dev server also works but is heavy — it has
-OOM-killed itself in this sandbox before. Prefer the static-export-and-serve method
-above for quick visual checks.)
+**Known limitation of this local preview method (not a real bug, just a
+testing-harness quirk):** `expo export -p web`'s static `.html` files per
+route (e.g. `dist/designs.html`) only resolve correctly when reached via
+**client-side navigation** from a loaded page (clicking a nav link/button).
+Loading one of those `.html` files **directly** (a fresh full-page
+`page.goto()`, or a raw browser `reload()` while sitting on an extensionless
+client-routed URL like `/designs`) renders an "Unmatched Route" page
+locally, because `python3 -m http.server` has no SPA-style fallback/rewrite
+rule. The real GitHub Pages deployment may or may not have the same
+limitation for *direct* deep links (not independently verified this
+session) — but normal usage (load the root, then click around) always
+works correctly both locally and live. **When testing "does X persist
+across a reload" locally, reload/re-navigate via the ROOT entry + UI clicks,
+not a raw `page.goto()` to a non-root `.html` file.**
 
 ---
 
-## 5. Known pitfalls / things that already burned time — don't repeat them
+## 5. Known pitfalls / lessons already learned — don't repeat them
 
-- **Don't trust HTTP header/hash comparisons alone as proof a deploy is correct.**
-  This project had a real bug (the `-e` vs `-b` flag mistake above) where hash and
-  `Last-Modified` comparisons matched perfectly between "the live site" and "the
-  gh-pages branch" — because both were consistently comparing the same *stale* root
-  content. It took an actual Playwright browser session driving the real user flow
-  (clicking through screens, attempting a real file download) to expose that nothing
-  had actually changed. Always do a live functional check, not just a header diff.
-- **`pointerEvents` must be passed as a React Native component PROP, not nested
-  inside a `style` object**, when you need `'box-none'` (or `'box-only'`) semantics.
-  `style={{ pointerEvents: 'box-none' }}` silently does nothing useful on web (falls
-  back to `auto`, which is NOT what you want) because `box-none` isn't valid CSS.
-  Use `<View style={styles.x} pointerEvents="box-none">` instead. A bug exactly like
-  this in `CreateButton.tsx` caused the floating center "+" button's invisible
-  touch-target to swallow taps meant for the neighboring nav buttons.
-- **`overflow: 'hidden'` on a rounded glassy container will clip any absolutely
-  positioned child that intentionally pokes outside its bounds** (e.g. a floating
-  action button meant to overlap the top edge of a nav bar). If something needs to
-  visually float above/outside a clipped container, render it as a *sibling*
-  positioned relative to a non-clipped wrapper, not as a child of the clipped one.
-- **A `useRef` value does not trigger a re-render when mutated.** If a ref's value
-  needs to affect what's conditionally rendered in JSX (e.g. "has this been
-  measured yet, so show the animated indicator"), use `useState` instead, or the UI
-  can lag a full render cycle behind reality.
-- **`react-native-reanimated` and `expo-blur` are already installed** — no need to
-  re-evaluate alternatives; `expo-blur`'s `BlurView` renders via CSS
-  `backdrop-filter` on web and works fine in the static export.
-- **cPanel "Setup Python App" (Phusion Passenger/WSGI) was confirmed present** on
-  the user's hosting plan — this is why the backend targets Flask + `a2wsgi`-style
-  WSGI deployment rather than a VPS. Passenger only supports WSGI apps (no raw
-  ASGI, no standalone background daemons/long-running workers) — keep that
-  constraint in mind for any backend architecture decisions.
+- Don't trust HTTP header/hash comparisons alone as proof a deploy is
+  correct — always do a live functional browser check too (§4).
+- `pointerEvents` must be a React Native component **prop**, not nested in
+  `style`, for `'box-none'`/`'box-only'` semantics to work on web.
+- `overflow:'hidden'` on a rounded glassy container clips any absolutely
+  positioned child that intentionally pokes outside its bounds.
+- A `useRef` mutation does not trigger a re-render — use `useState` if a
+  ref's value should affect conditional JSX.
+- `react-native-reanimated` and `expo-blur` are already installed and
+  working (including on the static web export).
+- cPanel "Setup Python App" (Phusion Passenger/WSGI) is confirmed present
+  on the user's hosting plan — backend targets Flask + WSGI deployment.
+  **Nothing has been deployed to cPanel yet** — the agent has no cPanel
+  credentials/access; the backend has only ever run in-sandbox
+  (`python3 api/app.py`, binds `0.0.0.0:5050`). `DEFAULT_BACKEND_URL` in
+  `src/services/digitizing/backendClient.ts` stays empty (disabled) in
+  production until that changes.
+- **Color quantization can over- or under-split colors** in
+  `digitizer/segmentation/color_quantize.py`: the catastrophic
+  "everything collapses into one muddy color" bug (background/anti-aliased
+  halo pixels stealing the whole MEDIANCUT palette) is **fixed** (backend
+  commit `6e11c02`). A milder, *not* fixed, inherent-to-simple-median-cut
+  issue remains: when two real foreground colors have very imbalanced
+  pixel counts and `max_colors` is set lower than the true color count, the
+  smaller region can still blend into a neighboring bucket rather than get
+  its own slot. A perceptual/weighted or k-means quantizer would improve
+  this further; flagged, not actioned.
+- **Shell commit messages containing backticks break `git commit -m`** —
+  see §2 item 5. Always use `git commit -F <tmpfile>` for anything with
+  backticks, code spans, or other shell-special characters.
+- **This project has no Jest/RN test environment configured anywhere** —
+  frontend verification uses `npx tsc --noEmit`, `npx expo export -p web`,
+  and (for pure, dependency-free logic modules) small standalone Node
+  scripts in `scripts/test-merge-*.mjs` that transpile a single `.ts` file
+  with the `typescript` package and run plain `node:assert` checks. This
+  pattern is established now (5 such scripts, 27 passing tests) — keep
+  using it for any new pure logic rather than introducing a full Jest setup
+  unless the user asks for one.
+- **RN-web (at least this app's build) appears to render some screens'
+  text content more than once in the DOM** (observed via Playwright:
+  `page.locator("text=...")` sometimes returns 2-4 matches for what's
+  visually a single on-screen element, with only one match having a real
+  bounding box). Root cause not fully diagnosed (not `useResponsive`'s
+  `useWindowDimensions` branching, which is a single conditional render —
+  possibly `numberOfLines`-truncated `Text` rendering both a visible and an
+  offscreen measurement copy under react-native-web, or some router
+  prefetch/duplication behavior). **When writing Playwright assertions
+  against this app, filter to elements with a non-null `bounding_box()`
+  before counting/asserting** — see `addCreatedDesign`-related tests run
+  this session for the pattern. Not something to "fix" — just a testing
+  gotcha.
 
 ---
 
-## 6. Frontend (`stitch-pro`) — structure & recent work
+## 6. Frontend (`stitch-pro`) — structure & status
 
-- Expo SDK ~57, Expo Router (file-based routing under `src/app/`), TypeScript,
-  React Native Web for the browser build. Read `AGENTS.md` in this repo root for
-  general Expo conventions (it's already tuned for this project — follow it).
-- Key layout files:
-  - `src/components/layout/AppShell.tsx` — top-level shell; branches to a desktop
-    sidebar layout or a mobile layout with the floating bottom nav.
-  - `src/components/layout/BottomNavigation.tsx` — the mobile bottom tab bar.
-  - `src/components/layout/CreateButton.tsx` — the floating circular "+" button
-    centered in the bottom nav.
-- **Bottom nav redesign (done, deployed, bugs fixed):** it now floats above the
-  bottom edge with margin, has full rounded corners, a frosted/glassy translucent
-  background (indigo-tinted, via `expo-blur` + `backdrop-filter`), and an animated
-  indigo highlight pill (Reanimated spring) that glides between tabs. The center
-  "+" button is a true circle and floats cleanly above the bar without being
-  clipped. Bugs that were found and fixed (see §5 for the general lessons):
-  create-button clipping, non-circular radius, broken `pointerEvents`, and a
-  stale-ref animation bug. **Last known-good state was verified live** via
-  Playwright: all four tabs (Home/Designs/Jobs/More) navigate reliably, and the
-  button renders as an unclipped circle. If the user reports it's *still* broken
-  after all this, the most likely next suspects are: (a) they're looking at a
-  cached version (see §5.1/§2.4 on CDN caching), or (b) a genuine
-  browser-specific rendering difference (e.g. Safari's handling of
-  `overflow:hidden` + `border-radius` + `backdrop-filter` combos is historically
-  inconsistent) that a Chromium-based Playwright check won't catch — ask for a
-  screenshot and the exact browser/device if this comes up again.
-- **Frontend ↔ backend integration (done, deployed — this was the big missing
-  link):** until this milestone, `stitch-pro` and `stitchpro-backend` were two
-  completely disconnected codebases. The auto-digitize flow
-  (`src/app/(app)/create/auto-digitize/success.tsx`) still does its own real
-  client-side artwork analysis + stitch-plan math (canvas pixel scan →
-  `src/utils/stitchEngine.ts` → `src/utils/stitchPlanner.ts`, producing a real
-  `DstPoint[]` stitch sequence) — that part was already genuine and stays as-is.
-  What changed: `src/services/digitizing/backendClient.ts` now sends that
-  stitch-point stream + the thread color list to the real Python backend's
-  `POST /api/design/points-to-file`, which uses pyembroidery to encode a real,
-  byte-accurate file in **any of DST/PES/JEF/VP3/EXP** — not just DST. The
-  download handler tries the backend first for every format (even DST, since
-  the backend's pyembroidery-based encoder is more authoritative than the
-  hand-rolled client-side `src/utils/dstWriter.ts`), and falls back to that
-  client-side DST-only writer if the backend is unreachable/unconfigured/times
-  out (8s timeout) — so production never breaks even with zero backend hosted.
-  Only `HUS` has no real export either way (pyembroidery has no HUS writer).
-  - **Backend URL is empty (disabled) by default in production** — see
-    `DEFAULT_BACKEND_URL` at the top of `backendClient.ts`. To test against a
-    running backend without rebuilding, run in the browser console:
-    `localStorage.setItem('stitchpro_backend_url', 'http://<host>:<port>')`
-    (and `localStorage.removeItem(...)` to go back to the default/fallback
-    behavior). Once a real, persistent backend host exists (see §7 cPanel
-    hosting notes), update `DEFAULT_BACKEND_URL` itself and redeploy.
-  - **Verified end-to-end live** via Playwright driving the actual wizard UI
-    (upload a sample → analyze → settings → preview → success → click a
-    format chip) against a locally-running `stitchpro-backend` instance: real
-    PES and DST files were downloaded and round-tripped correctly through
-    pyembroidery's own readers (correct stitch counts, 5 thread colors,
-    correct bounds). Also verified the fallback path with the backend
-    disabled: DST still downloads via the client-side writer, other formats
-    show an honest "couldn't reach the backend" toast instead of crashing or
-    claiming to be permanently unsupported.
-  - **Known limitation to fix eventually:** `compile_design`/`EmbroideryDesign`
-    (the model-driven path used by future satin/fill milestones) and
-    `points_to_file` (the raw-point-stream path the frontend uses today) are
-    two separate compilation routes into pyembroidery — see
-    `formats/points_writer.py`'s docstring in the backend repo for the
-    reasoning. Once server-side digitizing (real image → vector segmentation →
-    satin/fill) lands, new designs should move to the `EmbroideryDesign` path;
-    the point-stream bridge is intentionally a stepping stone, not the
-    permanent architecture.
-- Design tokens live in `src/theme/tokens.ts` (colors, spacing, radius, typography,
-  shadows, sizes) — always import from there, never hardcode raw values, per the
-  codebase's own convention.
+- Expo **SDK 58** (upgraded from 57 this cycle — `3d7727a`), Expo Router,
+  TypeScript, React Native Web. `AGENTS.md` in repo root has general Expo
+  conventions.
+- **Bottom nav (desktop sidebar / mobile floating pill): done, deployed,
+  bugs fixed** (`bde70f8`, `c3e416a`, `3605e15`). Not revisited this
+  session — no new reports of it being broken; treat as stable unless the
+  user says otherwise.
+- **Frontend ↔ backend integration: done.** `backendClient.ts` sends
+  stitch-point streams to the backend's `/api/design/points-to-file` for
+  real multi-format (DST/PES/JEF/VP3/EXP) export, with an 8s-timeout
+  fail-soft fallback to the client-side DST-only writer if the backend is
+  unreachable (which it always is in production right now — no persistent
+  host exists yet). `analyzeImageViaBackend` (used by
+  `useStitchPreview.ts`) calls the newer `/api/design/image-to-points`
+  JSON endpoint for live stitch *preview* rendering (as opposed to file
+  export) — this is what powers the Simulator's embossed stitch render on
+  **both web and native**, not just web; native has no equivalent
+  client-side fallback (impossible — `stitchEngine.ts` hard-requires a DOM
+  canvas), so native with no reachable backend correctly shows a "couldn't
+  reach the digitizing backend" message instead of crashing or showing a
+  stale/fake preview. This was the cross-platform stitch-generation gap
+  flagged in earlier sessions — **it's resolved**, verified by code
+  inspection of `useStitchPreview.ts` this session (not independently
+  re-tested on a real native device/simulator, since this sandbox has no
+  native runtime — only web has been live-tested).
+- **Realistic 2D embossed stitch preview: done** (`4085ff2`).
+  `EmbossedStitchCanvas.tsx` does a three-layer render (shadow-offset pass
+  → gradient-shaded thread body → sheen highlight) from real stitch points,
+  via `react-native-svg` (Skia was considered and rejected). A sample
+  reconstruction is in `sample-output/simulator_embossed_preview_mockup.png`
+  (built standalone outside the app for a "show me a screenshot" ad-hoc
+  request — not a literal screen capture, but built from the real backend
+  + real rendering code).
+- **Real local persistence: done, this session** (`3e57a12`, `7ade61a`,
+  `066991c`). This was the single biggest remaining gap in the whole app:
+  **every** service module (`designs`, `jobs`, `threads`, `machines`,
+  `auth`/settings) used to keep its data in a plain in-memory array or
+  ignore mutations entirely, so *everything* a user did — digitize/save a
+  design, favorite something, delete something, use a template, save from
+  Manual Editor, add/advance a job, add a thread, register/toggle/delete a
+  machine, edit the Settings form (name/email/default format/hoop/unit/
+  notifications) — silently reverted on the next page refresh or app
+  relaunch. Settings' "Save Changes" was the most egregious case: it was a
+  pure 400ms `setTimeout` + success toast with **zero** actual persistence.
+  All of this now goes through `@react-native-async-storage/async-storage`
+  (already a dependency, works on web via localStorage/IndexedDB and on
+  native via its native KV store) via a thin wrapper,
+  `src/services/storage/localStore.ts`. Architecture, per service:
+  - A hardcoded **seed** array/object stays as-is in source (can't safely
+    persist a bundler `require()` asset id across rebuilds — ids aren't
+    stable).
+  - A pure, dependency-free `mergeX.ts` module per service
+    (`designs/mergeDesigns.ts`, `jobs/mergeJobs.ts`,
+    `threads/mergeThreads.ts`, `machines/mergeMachines.ts`,
+    `auth/mergeProfile.ts`) layers persisted created-items / overrides /
+    delete-tombstones on top of the seed. Kept free of React
+    Native/AsyncStorage imports specifically so they're unit-testable with
+    plain Node (see §5's testing note) — `scripts/test-merge-*.mjs`, one per
+    module, 27 tests total, all passing.
+  - `designsService.create()` normalizes any thumbnail to a durable `{uri}`
+    form via `Image.resolveAssetSource()` before persisting (handles the
+    "use this Template" flow, which passes a numeric `require()` id) —
+    this was a real latent bug caught and fixed *before* it shipped, not
+    an incident.
+  - `src/utils/thumbnail.ts` (+ new `expo-image-manipulator` dependency,
+    version-matched to SDK 58) downscales/compresses a freshly picked
+    Auto-Digitize artwork image into a small `data:` URI before saving,
+    since the image picker's own `uri` (a web `blob:` URL or native
+    cache-dir path) doesn't survive a reload/relaunch.
+  - `designs.tsx`'s "Delete" button now actually calls
+    `designsService.remove()` (it used to only mutate local component
+    state, so a refresh brought the "deleted" design right back).
+  - Verified end-to-end this session with real headless-browser
+    (Playwright) sessions against a static web export: created a design via
+    Manual Editor → reload → still there; toggled a favorite → reload →
+    still favorited; deleted a design → reload → still deleted; edited
+    Settings' name + default export format → saved → reload → both
+    persisted. All confirmed via real `window.localStorage` inspection, not
+    just visual appearance.
+  - **Not yet extended to**: Templates (read-only catalog, no mutation
+    needed), Quality Check / Cost Calculator / Analytics (pure
+    read/compute screens, nothing to persist), Learn (static content).
+    These were checked this session and found to have no fake-persistence
+    gap — leave them alone unless the user reports otherwise.
+- Design tokens: `src/theme/tokens.ts` — always import from there.
 
 ---
 
 ## 7. Backend (`stitchpro-backend`) — structure & status
 
-- Python. `api/app.py` (Flask), `digitizer/model.py` (internal embroidery data
-  model — the *only* representation the rest of the backend should use; nothing
-  outside `formats/dst/writer.py` should touch a raw pyembroidery `EmbPattern` or
-  DST bytes directly), `formats/` (format read/write layer), `passenger_wsgi.py`
-  (entry point for cPanel's Phusion Passenger hosting).
-- `requirements.txt`: `flask`, `pyembroidery`, `pillow`, `shapely`. Plan is to also
-  add `scikit-image` for Milestone 5 (contour/connected-component detection,
-  replacing what OpenCV would normally do — OpenCV itself was ruled out as too
-  heavy/unreliable to install on constrained shared hosting; the
-  Pillow+Shapely+scikit-image combo was chosen instead and accepted by the user).
-  Re-test scikit-image's SciPy dependency once the actual cPanel Python App
-  environment is provisioned, since that's the piece most likely to have trouble
-  on constrained shared hosting.
-- **Third-party license decisions already made** (see
-  `docs/THIRD_PARTY_LICENSES.md` for full detail):
-  - `pyembroidery` (MIT) — ✅ use directly as the DST/format read-write layer. Do
-    not reimplement binary format encoding by hand.
-  - `libembroidery` (zlib) — not needed; pyembroidery already covers everything
-    in Python.
-  - `Ink/Stitch` (GPL-3.0) and `PEmbroider` (GPL-3.0 + Anti-Capitalist Software
-    License, which explicitly forbids commercial embroidery-digitizing software)
-    — **reference/conceptual reading only, never copy or closely mirror their
-    code.** PEmbroider in particular is legally radioactive for this project.
-- **Milestone 1 (running/straight stitch pipeline): done and verified.**
-  **Milestone 2 (satin stitch): not started yet — this is the next backend
-  engine milestone to pick up.** `ObjectType` enum in `digitizer/model.py`
-  already has `RUNNING`, `SATIN`, `FILL` defined (with `COLUMN`/`APPLIQUE`/
-  `SPECIAL` reserved for later per the original project brief's §8), but only
-  the running-stitch path has real logic behind it so far.
-- **API surface (current, real):**
-  - `GET /api/health` — liveness check.
-  - `GET /api/formats` — returns the list of real supported export format ids
-    (currently `["dst", "pes", "jef", "vp3", "exp"]`).
-  - `POST /api/design/line-to-dst` — legacy Milestone-1 test endpoint, a single
-    raw polyline → DST only. Kept for backward compat; not used by the
-    frontend.
-  - `POST /api/design/points-to-file` — **the real integration endpoint the
-    frontend actually calls.** Takes an already-computed point stream
-    (`{x, y, command}` in 0.1mm absolute units, `command` one of
-    `jump`/`stitch`/`colorChange`/`end` — exactly stitch-pro's own `DstPoint[]`
-    convention) plus an optional ordered `colors` array and a `format`, and
-    returns a real file in that format. See `formats/points_writer.py` for why
-    this bypasses the `EmbroideryDesign`/`ObjectType` model (it's compiling an
-    already-complete stitch plan, not re-digitizing artwork).
-  - CORS is wide open (`Access-Control-Allow-Origin: *`) in `api/app.py` so a
-    browser-hosted frontend on a different origin (e.g. GitHub Pages) can call
-    it directly — tighten this once there's real user auth/session state to
-    protect.
-- Hosting: Python/Flask via cPanel's "Setup Python App" (Passenger/WSGI) — user
-  confirmed their plan has this option, so no VPS pivot is needed. Remember the
-  WSGI-only constraint from §5 when adding anything backend-side.
-  **Nothing has been deployed to cPanel yet** — the agent has no cPanel
-  credentials/access, so this backend has only ever been run and tested
-  in-sandbox (`python3 api/app.py`, binds `0.0.0.0:5050`). The user (or a human
-  with cPanel access) needs to actually set up the Python App there, install
-  `requirements.txt`, point `passenger_wsgi.py` at `api/app.py`'s `app` object,
-  and give it a real persistent domain/subdomain — then update
-  `DEFAULT_BACKEND_URL` in the frontend's `backendClient.ts` to that URL,
-  rebuild, and redeploy. Ask the user for a walkthrough of their specific
-  cPanel panel if/when this is actually attempted.
+- Python 3.13, Flask (`api/app.py`), `digitizer/model.py` (the only
+  internal data model — nothing outside `formats/dst/writer.py` should
+  touch raw pyembroidery `EmbPattern`/DST bytes directly), `formats/`
+  (read/write layer), `passenger_wsgi.py` (cPanel entry point).
+- `requirements.txt`: `flask`, `pyembroidery`, `pillow`, `shapely`. No
+  OpenCV/scikit-image anywhere (deliberate, for shared-hosting constraints
+  — see `docs/embroidery-engine-research.md`).
+- **License stance (unchanged)**: `pyembroidery` (MIT) used directly;
+  Ink/Stitch and PEmbroider (GPL/ACSL) are reference-reading only, never
+  copied — PEmbroider's Anti-Capitalist license explicitly forbids
+  commercial embroidery-digitizing software, stay far away from its code.
+- **All 5 planned engine milestones are done**: running stitch (`082996b`),
+  satin (`1ddc364`), fill/tatami (`c945e9a`), combined routing (`7df5cf6`),
+  real server-side image digitizing / PNG → segmentation → objects
+  (`b6331e1`). Plus a quality pass (fill holes, underlay, arc-length satin
+  curves — `b76ccf3`) and the cross-platform JSON points-preview endpoint
+  (`e615e3e`). **98/98 tests passing** as of `6e11c02` (latest).
+- **API surface (current, real)**:
+  - `GET /api/health`, `GET /api/formats`.
+  - `POST /api/design/line-to-dst` — legacy Milestone-1 endpoint, unused by
+    the frontend, kept for backward compat.
+  - `POST /api/design/points-to-file` — compiles an already-computed
+    `DstPoint[]`-style stream into a real DST/PES/JEF/VP3/EXP file. This is
+    what the frontend's export/download flow actually calls.
+  - `POST /api/design/image-to-file` — Milestone 5: real image → digitize →
+    file, for server-side digitizing of a raw uploaded image.
+  - `POST /api/design/image-to-points` — same digitizing pipeline as
+    image-to-file, but returns the JSON point-stream contract instead of a
+    binary file, for client-side *preview* rendering (web + native alike).
+    This is what `useStitchPreview.ts` calls.
+  - CORS wide open (`*`) — tighten once there's real auth/session state.
+- **Fixed this session**: a real quantization bug (`6e11c02`) where
+  `build_label_grid` ran MEDIANCUT over the whole downscaled image
+  including the near-background anti-aliased halo around every shape,
+  which could waste a small `max_colors` budget entirely and collapse
+  genuinely distinct foreground colors into one muddy average (reproduced:
+  a 2-color navy/gold badge → 1 detected color). Fixed by classifying
+  background pixels first (unchanged rule), then quantizing only the
+  foreground pixel multiset. See §5 for the remaining, not-fixed, milder
+  imbalanced-color-count limitation.
+- **Hosting**: cPanel "Setup Python App" (Passenger/WSGI) confirmed
+  available on the user's plan, but **nothing has been deployed there
+  yet** — the agent has no cPanel credentials. The backend has only ever
+  run in-sandbox. This is still the single biggest "real" gap in the whole
+  project: until a backend is actually hosted somewhere persistent, every
+  real-digitizing/multi-format-export/embossed-preview feature only works
+  when the frontend is pointed at a temporarily-running in-sandbox backend
+  via the `localStorage.setItem('stitchpro_backend_url', 'http://host:port')`
+  override — it is NOT live for real production users on the GitHub Pages
+  site today.
 
 ---
 
 ## 8. Suggested next steps (pick up here)
 
-1. If the user reports the bottom-nav bugs are still happening after everything
-   in §6, get a screenshot + exact browser/device before changing anything
-   further — don't guess blindly at more CSS tweaks.
-2. **Deploy `stitchpro-backend` somewhere persistent** (ideally the user's real
-   cPanel hosting — see §7's hosting note) and update `DEFAULT_BACKEND_URL` in
-   `src/services/digitizing/backendClient.ts` to point at it, then rebuild +
-   redeploy the frontend. Right now real multi-format export (PES/JEF/VP3/EXP)
-   only works when someone manually points the app at an in-sandbox backend via
-   the `localStorage` override — it's not live for real users yet.
-3. Backend Milestone 2: implement satin stitch generation in `digitizer/model.py`
-   / the digitizing pipeline, following the same data-model discipline (stitch
-   plan → `formats/dst/writer.py` → pyembroidery, nothing bypasses that layering).
-   Use `research/inkstitch-notes.md` as a conceptual reference for satin column
-   algorithms (rails + zigzag + underlay types + pull compensation) — reimplement
-   independently, never port Ink/Stitch's actual (GPL) code.
-4. Once server-side digitizing (real segmentation into satin/fill regions, not
-   just the frontend's canvas-based color-run scan) exists, migrate the
-   frontend off the `points-to-file` bridge endpoint onto a proper
-   `EmbroideryDesign`-based `/api/digitize` (upload an image, get a full
-   multi-stitch-type design back) — see `formats/points_writer.py`'s docstring
-   for why the current integration is a deliberate stepping stone, not the
-   final architecture.
-5. Once satin is in, re-run the full push/deploy loop for both repos as usual.
-4. Revisit the `scikit-image`/SciPy hosting question once the user's actual
-   cPanel Python App environment exists, before committing further to that
-   stack for Milestone 5.
+1. **Deploy `stitchpro-backend` somewhere persistent** (ideally the user's
+   cPanel hosting) and update `DEFAULT_BACKEND_URL` in
+   `src/services/digitizing/backendClient.ts`, then rebuild + redeploy the
+   frontend. This is the highest-leverage remaining task — it's the one
+   thing that turns "real digitizing works when I manually point the app
+   at a sandbox" into "real digitizing works for actual users". Needs a
+   human with cPanel access; ask the user to walk through their panel, or
+   for credentials, when this is picked up.
+2. If the user reports the bottom nav or embossed preview rendering is
+   broken on a real device, get a screenshot + exact browser/device before
+   guessing at CSS/layout fixes — see §5's lessons.
+3. Local Windows reproduction of the dev environment was previously
+   paused, blocked by an unresolved Expo Go sign-in error (not revisited
+   this session — may still be an open thread with the user).
+4. The color-quantization imbalanced-pixel-count limitation (§5/§7) is a
+   nice-to-have improvement (weighted/k-means quantizer) if better
+   multi-color digitizing accuracy becomes a priority.
+5. Persistence (§6) currently only covers this device/browser's local
+   storage — there is still no real backend database or multi-device sync.
+   If the user wants designs/jobs to follow them across devices or wants
+   a real login system, that's a genuinely new, large feature (real
+   backend auth + a database), not a quick follow-up — confirm scope with
+   the user before starting it rather than assuming.
+6. Always re-run the full verification loop before calling anything done:
+   `cd stitchpro-backend && venv/bin/python3 -m pytest -q` (expect 98/98+),
+   `cd stitch-pro && npx tsc --noEmit` (expect clean), `node
+   scripts/test-merge-*.mjs` for each (expect all green), `npx expo export
+   -p web` (expect no errors), then a live-browser smoke check per §4.
