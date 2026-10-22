@@ -192,9 +192,11 @@ export default function DesignsScreen() {
               </Pressable>
               <Pressable
                 style={styles.sheetAction}
-                onPress={() => {
-                  setDesigns((prev) => prev?.filter((d) => d.id !== active.id) ?? prev);
+                onPress={async () => {
+                  const id = active.id;
+                  setDesigns((prev) => prev?.filter((d) => d.id !== id) ?? prev);
                   setActive(null);
+                  await designsService.remove(id);
                   show('Design removed.', 'success');
                 }}
               >

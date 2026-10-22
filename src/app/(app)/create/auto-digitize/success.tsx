@@ -14,6 +14,7 @@ import type { StitchFormat } from '@/services/types';
 import { useResponsive } from '@/hooks/useResponsive';
 import { buildDstFile } from '@/utils/dstWriter';
 import { exportViaBackend, type BackendFormat } from '@/services/digitizing/backendClient';
+import { createPersistableThumbnail } from '@/utils/thumbnail';
 
 const FORMATS: StitchFormat[] = ['DST', 'PES', 'JEF', 'EXP', 'VP3', 'HUS'];
 
@@ -44,17 +45,23 @@ export default function DigitizeSuccessScreen() {
     if (savedRef.current) return;
     savedRef.current = true;
 
-    const thumbnail: Design['thumbnail'] = { uri: artwork.uri };
+    // The picker's own uri (a web `blob:` URL or a native cache-dir path)
+    // doesn't survive a page refresh / app relaunch, so the design would
+    // "lose" its thumbnail the moment persistence kicked in. Re-encode it
+    // as a small, durable `data:` URI first -- see utils/thumbnail.ts.
+    createPersistableThumbnail(artwork.uri).then((uri) => {
+      const thumbnail: Design['thumbnail'] = { uri };
 
-    designsService
-      .create({
-        name: artwork.name,
-        thumbnail,
-        stitches: stitchPlan.stitches,
-        colors: stitchPlan.colors,
-        sizeMm: stitchPlan.sizeMm,
-      })
-      .then(() => setSaved(true));
+      designsService
+        .create({
+          name: artwork.name,
+          thumbnail,
+          stitches: stitchPlan.stitches,
+          colors: stitchPlan.colors,
+          sizeMm: stitchPlan.sizeMm,
+        })
+        .then(() => setSaved(true));
+    });
   }, [artwork, stitchPlan]);
 
   if (!artwork || !stitchPlan) return null;

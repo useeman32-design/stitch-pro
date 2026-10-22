@@ -1,11 +1,23 @@
 /**
- * Jobs service — mock implementation.
- * Used by the Production Jobs board.
+ * Jobs service — real local persistence on top of a hardcoded seed board.
+ * Used by the Production Jobs board. See designs/index.ts's docstring for
+ * why this pattern exists (previously everything reverted on refresh).
  */
 
 import type { JobStatus, ProductionJob } from '../types';
+import { localStore } from '../storage/localStore';
+import {
+  addCreatedJob,
+  emptyJobsState,
+  mergeJobs,
+  removeJobFromState,
+  setJobStatusInState,
+  type JobsPersistedState,
+} from './mergeJobs';
 
-const mockJobs: ProductionJob[] = [
+const STATE_KEY = 'jobs.state.v1';
+
+const seedJobs: ProductionJob[] = [
   {
     id: 'job_1',
     customer: 'Musa Garba',
@@ -70,11 +82,20 @@ function delay<T>(value: T, ms = 300): Promise<T> {
 
 let nextJobSeq = 1;
 
+async function loadState(): Promise<JobsPersistedState> {
+  return localStore.get<JobsPersistedState>(STATE_KEY, emptyJobsState());
+}
+
+async function saveState(state: JobsPersistedState): Promise<void> {
+  await localStore.set(STATE_KEY, state);
+}
+
 export const jobsService = {
   statusFlow,
 
   async list(): Promise<ProductionJob[]> {
-    return delay(mockJobs);
+    const state = await loadState();
+    return delay(mergeJobs(seedJobs, state));
   },
 
   async create(input: {
@@ -85,7 +106,7 @@ export const jobsService = {
     machine: string;
   }): Promise<ProductionJob> {
     const job: ProductionJob = {
-      id: `job_new_${nextJobSeq++}`,
+      id: `job_new_${Date.now()}_${nextJobSeq++}`,
       customer: input.customer,
       design: input.design,
       quantity: input.quantity,
@@ -93,25 +114,36 @@ export const jobsService = {
       machine: input.machine,
       status: 'Pending',
     };
-    mockJobs.unshift(job);
+    const state = await loadState();
+    await saveState(addCreatedJob(state, job));
     return delay(job, 250);
   },
 
   /** Advances a job to the next stage in the production workflow. */
   async advanceStatus(id: string): Promise<ProductionJob | undefined> {
-    const job = mockJobs.find((j) => j.id === id);
-    if (job) {
-      const idx = statusFlow.indexOf(job.status);
-      if (idx >= 0 && idx < statusFlow.length - 1) {
-        job.status = statusFlow[idx + 1];
-      }
-    }
-    return delay(job, 200);
+    const state = await loadState();
+    const current = mergeJobs(seedJobs, state).find((j) => j.id === id);
+    if (!current) return delay(undefined, 200);
+    const idx = statusFlow.indexOf(current.status);
+    if (idx < 0 || idx >= statusFlow.length - 1) return delay(current, 200);
+    const nextStatus = statusFlow[idx + 1];
+    const isCreated = state.created.some((j) => j.id === id);
+    await saveState(setJobStatusInState(state, id, isCreated, nextStatus));
+    return delay({ ...current, status: nextStatus }, 200);
   },
 
   async setStatus(id: string, status: JobStatus): Promise<ProductionJob | undefined> {
-    const job = mockJobs.find((j) => j.id === id);
-    if (job) job.status = status;
-    return delay(job, 200);
+    const state = await loadState();
+    const current = mergeJobs(seedJobs, state).find((j) => j.id === id);
+    if (!current) return delay(undefined, 200);
+    const isCreated = state.created.some((j) => j.id === id);
+    await saveState(setJobStatusInState(state, id, isCreated, status));
+    return delay({ ...current, status }, 200);
+  },
+
+  async remove(id: string): Promise<void> {
+    const state = await loadState();
+    await saveState(removeJobFromState(state, id));
+    return delay(undefined, 150);
   },
 };

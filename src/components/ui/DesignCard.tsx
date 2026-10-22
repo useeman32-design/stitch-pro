@@ -20,6 +20,7 @@ export function DesignCard({ design, onPress, onToggleFavorite }: DesignCardProp
           onPress={onToggleFavorite}
           hitSlop={8}
           style={styles.favoriteBtn}
+          accessibilityLabel={design.favorite ? 'Remove from favorites' : 'Add to favorites'}
         >
           <Heart
             size={15}
