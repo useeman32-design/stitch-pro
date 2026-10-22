@@ -119,3 +119,77 @@ export async function isBackendReachable(): Promise<boolean> {
     return false;
   }
 }
+
+export interface BackendPointsResult {
+  widthMm: number;
+  heightMm: number;
+  threads: string[];
+  points: DstPoint[];
+}
+
+const IMAGE_FETCH_TIMEOUT_MS = 20000;
+
+/**
+ * Milestone 5 wiring: asks the real backend to actually digitize `imageUri`
+ * server-side (decode -> segment -> embroidery objects -> real stitches,
+ * see stitchpro-backend's digitizer/pipeline.py) and returns the result as
+ * a plain point stream — the same `DstPoint`-shaped contract the app
+ * already speaks everywhere else, so every existing point-based
+ * converter/renderer keeps working unmodified.
+ *
+ * This is the one stitch-plan source that works identically on native and
+ * web: the browser-canvas-only client analysis in stitchEngine.ts simply
+ * cannot run on native at all (see useStitchPreview.ts, which tries this
+ * first and only falls back to the client analysis on web). Returns `null`
+ * on any failure (backend disabled/unreachable/timeout/error, or an image
+ * with no detectable foreground) — callers should treat that as "no
+ * backend preview available" rather than an error to surface loudly.
+ */
+export async function analyzeImageViaBackend(
+  imageUri: string,
+  widthMm: number,
+  heightMm: number,
+  maxColors = 6
+): Promise<BackendPointsResult | null> {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl || !imageUri) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+
+  try {
+    const imageResponse = await fetch(imageUri);
+    if (!imageResponse.ok) return null;
+    const blob = await imageResponse.blob();
+
+    const form = new FormData();
+    // `as any`: React Native's FormData/Blob typings don't perfectly match
+    // the DOM lib's, but this is the standard RN pattern for multipart
+    // image uploads and works identically on web.
+    form.append('image', blob as any, 'artwork.png');
+    form.append('width_mm', String(widthMm));
+    form.append('height_mm', String(heightMm));
+    form.append('max_colors', String(maxColors));
+
+    const response = await fetch(`${baseUrl}/api/design/image-to-points`, {
+      method: 'POST',
+      body: form as any,
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!Array.isArray(data.points) || !data.points.length) return null;
+
+    return {
+      widthMm: data.width_mm,
+      heightMm: data.height_mm,
+      threads: data.threads ?? [],
+      points: data.points,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+

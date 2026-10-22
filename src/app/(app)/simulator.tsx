@@ -15,9 +15,9 @@ import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { StitchCanvas } from '@/components/ui/StitchCanvas';
+import { EmbossedStitchCanvas } from '@/components/ui/EmbossedStitchCanvas';
 import { useResponsive } from '@/hooks/useResponsive';
-import { useStitchSimulation } from '@/hooks/useStitchSimulation';
+import { useStitchPreview } from '@/hooks/useStitchPreview';
 import { designsService, type Design } from '@/services/designs';
 import { formatNumber } from '@/utils/format';
 
@@ -56,7 +56,15 @@ export default function SimulatorScreen() {
 
   // Real generated stitch path for the selected design's actual thumbnail —
   // this drives the canvas animation below instead of a static-image wipe.
-  const sim = useStitchSimulation(selected?.thumbnail, plan?.colorCount ?? 5);
+  // Tries the real stitchpro-backend digitizer first (works on native and
+  // web alike), and only falls back to the browser-only client analysis on
+  // web if the backend is unreachable — see useStitchPreview.ts.
+  const sim = useStitchPreview(
+    selected?.thumbnail,
+    selected?.sizeMm.width ?? 90,
+    selected?.sizeMm.height ?? 90,
+    plan?.colorCount ?? 5
+  );
 
   useEffect(() => {
     if (!playing || !plan) return;
@@ -156,11 +164,18 @@ export default function SimulatorScreen() {
           <View style={[styles.stage, shadows.card as object]}>
             {sim.loading ? (
               <View style={styles.stageLoading} />
+            ) : sim.source === 'none' ? (
+              <View style={styles.stageLoading}>
+                <Text style={[typography.bodySmall, styles.noPreviewText]}>
+                  Couldn&apos;t reach the digitizing backend to build a stitch preview for this design.
+                </Text>
+              </View>
             ) : (
-              <StitchCanvas
+              <EmbossedStitchCanvas
                 segments={sim.segments}
                 palette={palette}
-                gridSize={sim.gridSize}
+                widthMm={sim.widthMm}
+                heightMm={sim.heightMm}
                 progress={progress}
                 onNeedlePosition={setNeedlePos}
               />
@@ -313,6 +328,13 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: colors.gray200,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  noPreviewText: {
+    textAlign: 'center',
+    color: colors.textSecondary,
   },
   needleWrap: {
     position: 'absolute',
