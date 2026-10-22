@@ -144,7 +144,26 @@ export function EmbossedStitchCanvas({
     [visible.full, visible.partial]
   );
 
-  const fullEmboss = drawList.length <= EMBOSS_LAYER_CAP;
+  // `segments` arrive in real mm units (0..widthMm / 0..heightMm) — see
+  // gridSegmentsToMm/pointsToMmSegments in stitchPreview.ts — but the SVG
+  // viewBox above is in "preview units" (mm * PX_PER_MM) for stroke/gradient
+  // resolution. Drawing mm coordinates directly against that viewBox put
+  // every stitch inside only the top-left 1/PX_PER_MM (10%) of the canvas,
+  // making any design render tiny in the corner instead of filling the
+  // stage. Scale into view-space here, once, right before rendering.
+  const scaledDrawList = useMemo(
+    () =>
+      drawList.map((s) => ({
+        ...s,
+        x1: s.x1 * PX_PER_MM,
+        y1: s.y1 * PX_PER_MM,
+        x2: s.x2 * PX_PER_MM,
+        y2: s.y2 * PX_PER_MM,
+      })),
+    [drawList]
+  );
+
+  const fullEmboss = scaledDrawList.length <= EMBOSS_LAYER_CAP;
   // Thread width scales gently with design size so a tiny monogram and a
   // large back patch both look proportionate rather than either needle-thin
   // or comically thick.
@@ -202,7 +221,7 @@ export function EmbossedStitchCanvas({
         {/* shadow pass -- gives the raised/embossed look */}
         {!fullEmboss
           ? null
-          : drawList.map((s, i) => (
+          : scaledDrawList.map((s, i) => (
               <Line
                 key={`shadow-${i}`}
                 x1={s.x1 + shadowOffset}
@@ -216,7 +235,7 @@ export function EmbossedStitchCanvas({
             ))}
 
         {/* main thread-colored pass */}
-        {drawList.map((s, i) => (
+        {scaledDrawList.map((s, i) => (
           <Line
             key={`body-${i}`}
             x1={s.x1}
@@ -232,7 +251,7 @@ export function EmbossedStitchCanvas({
         {/* sheen pass -- thin bright highlight along the lit edge */}
         {!fullEmboss
           ? null
-          : drawList.map((s, i) => (
+          : scaledDrawList.map((s, i) => (
               <Line
                 key={`sheen-${i}`}
                 x1={s.x1 - highlightOffset}
