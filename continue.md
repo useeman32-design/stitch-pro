@@ -1,6 +1,9 @@
 # StitchPro — Handoff / Continuation Notes
 
-_Last updated: 2026-10-22 (overnight autonomous session, while the user slept).
+_Last updated: 2026-10-22, later same day (user tested on GitHub Pages after
+waking up and reported a real bug; fixed, verified live, see §6)._
+
+_Originally written: 2026-10-22 (overnight autonomous session, while the user slept).
 Written for a fresh AI agent picking this project up in a new chat/session.
 Read this whole file before doing anything — it supersedes the 2026-09-29
 version of this file (kept below in spirit, not literally; a lot has changed)._
@@ -233,6 +236,31 @@ not a raw `page.goto()` to a non-root `.html` file.**
   smaller region can still blend into a neighboring bucket rather than get
   its own slot. A perceptual/weighted or k-means quantizer would improve
   this further; flagged, not actioned.
+- **The local-HEAD-behind-origin git drift described in §3 is not
+  hypothetical — it recurred this same session**, immediately after
+  fixing the Simulator bug above: `git status` suddenly showed ~25 files
+  as new/modified/deleted relative to local HEAD, even though all of that
+  work had already been committed and pushed hours earlier. `git log` on
+  local HEAD showed a commit from *several sessions* earlier
+  (`6b0fdf6`), while `git fetch origin main` + `git log origin/main`
+  correctly showed the real, current history (`a2f192b`, with everything
+  through Designs/Jobs/Threads/Machines/Settings persistence already
+  on it). The actual files on disk were current (they matched
+  `a2f192b` + one genuinely new uncommitted fix) — only git's own HEAD
+  pointer/object graph had reverted, presumably a sandbox snapshot-restore
+  artifact. **Recovery procedure that worked and is safe to repeat:**
+  (1) `git diff origin/main --stat` to see the *true* diff between the
+  working tree and the real remote (ignore `git status`'s comparison
+  against the stale local HEAD entirely) — this cleanly isolated the one
+  real new file from the ~25 false positives; (2) back up that one
+  genuinely-new/changed file's content (`cp` to `/tmp`); (3)
+  `git reset --hard origin/main` to snap local history back to truth;
+  (4) copy the backed-up file back over the now-correct working tree;
+  (5) confirm `git diff origin/main --stat` now shows only that one
+  real file, commit, push as normal. **Never `git reset --hard` without
+  first confirming via `git diff origin/main --stat` (not `git status`)
+  exactly which files would actually be reverted** — the two can disagree
+  dramatically when local HEAD itself is stale.
 - **Shell commit messages containing backticks break `git commit -m`** —
   see §2 item 5. Always use `git commit -F <tmpfile>` for anything with
   backticks, code spans, or other shell-special characters.
@@ -346,6 +374,27 @@ not a raw `page.goto()` to a non-root `.html` file.**
     read/compute screens, nothing to persist), Learn (static content).
     These were checked this session and found to have no fake-persistence
     gap — leave them alone unless the user reports otherwise.
+- **Real bug found and fixed (same day, after the user tested the live
+  site): Simulator rendered every design at ~1/10th size, stuck in the
+  top-left corner of the stage** (commit `036f8b3`). Root cause:
+  `EmbossedStitchCanvas.tsx`'s SVG `viewBox` is sized in "preview units"
+  (mm × `PX_PER_MM` = 10, e.g. an 80mm design gets `viewBox="0 0 800 800"`)
+  for stroke/gradient resolution, but the segment coordinates it receives
+  from `stitchPreview.ts` (`gridSegmentsToMm`/`pointsToMmSegments`) are in
+  real mm units (0..80 for that same design) — they were drawn directly
+  against the 10×-larger viewBox with no scaling, so every design rendered
+  correctly shaped but at exactly 1/10th size. Confirmed via live-site DOM
+  inspection (viewBox was right, but every `<line>`'s x/y only spanned
+  0..~79 instead of 0..~790). **Fixed** by scaling segment coordinates by
+  `PX_PER_MM` once, right before rendering (new `scaledDrawList`); the
+  needle-position percentage calculation already used the correct raw-mm
+  values and didn't need touching. Verified with a real headless-browser
+  stitch-out against the live production URL, not just locally.
+  **If a similar "shape is right but size/position is off" visual bug
+  shows up anywhere else that uses `MmSegment`s or feeds into an SVG
+  viewBox, check for exactly this kind of unit mismatch between "real mm"
+  and "preview-scaled" coordinate spaces before assuming it's a CSS/layout
+  issue.**
 - Design tokens: `src/theme/tokens.ts` — always import from there.
 
 ---
