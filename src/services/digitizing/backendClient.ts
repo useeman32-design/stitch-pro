@@ -145,11 +145,32 @@ const IMAGE_FETCH_TIMEOUT_MS = 20000;
  * with no detectable foreground) — callers should treat that as "no
  * backend preview available" rather than an error to surface loudly.
  */
+export interface AnalyzeImageOptions {
+  /** How many distinct thread colors to reduce the artwork to. Default 6. */
+  maxColors?: number;
+  /** "fill" (default, tatami rows) or "cross" (a grid of X's) -- see
+   * stitchpro-backend's digitizer/pipeline.py. Applies to every detected
+   * region in the design. */
+  stitchStyle?: 'fill' | 'cross';
+  /** Stitch/grid direction in degrees. Default 0. */
+  angleDeg?: number;
+  /** Adaptive corner-preserving curve smoothing on detected region
+   * boundaries. Default true -- sharp corners are always preserved either
+   * way; only set false to see the raw simplified-polygon boundary. */
+  smoothCurves?: boolean;
+  /** FILL row spacing, or CROSS_STITCH grid cell size, in mm. Omit to use
+   * the backend's own style-appropriate default (0.4mm fill / 1.8mm
+   * cross). */
+  densityMm?: number;
+  /** Target stitch length along a row, in mm. Default 3.0. */
+  stitchLengthMm?: number;
+}
+
 export async function analyzeImageViaBackend(
   imageUri: string,
   widthMm: number,
   heightMm: number,
-  maxColors = 6
+  options: AnalyzeImageOptions = {}
 ): Promise<BackendPointsResult | null> {
   const baseUrl = getBackendUrl();
   if (!baseUrl || !imageUri) return null;
@@ -169,7 +190,12 @@ export async function analyzeImageViaBackend(
     form.append('image', blob as any, 'artwork.png');
     form.append('width_mm', String(widthMm));
     form.append('height_mm', String(heightMm));
-    form.append('max_colors', String(maxColors));
+    form.append('max_colors', String(options.maxColors ?? 6));
+    if (options.stitchStyle) form.append('stitch_style', options.stitchStyle);
+    if (options.angleDeg !== undefined) form.append('angle_deg', String(options.angleDeg));
+    if (options.smoothCurves !== undefined) form.append('smooth_curves', String(options.smoothCurves));
+    if (options.densityMm !== undefined) form.append('density_mm', String(options.densityMm));
+    if (options.stitchLengthMm !== undefined) form.append('stitch_length_mm', String(options.stitchLengthMm));
 
     const response = await fetch(`${baseUrl}/api/design/image-to-points`, {
       method: 'POST',

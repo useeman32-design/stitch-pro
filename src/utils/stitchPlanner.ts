@@ -134,6 +134,60 @@ export function segmentsToDstPoints(
 }
 
 /**
+ * Summarizes an already-computed `DstPoint[]` stream (e.g. straight from
+ * stitchpro-backend's real `/api/design/image-to-points` digitizing
+ * pipeline) into the same `RealStitchPlan` stats shape
+ * `segmentsToDstPoints` produces for the legacy client-only path -- so
+ * every screen downstream of `DigitizeWizardContext` (stats cards, the
+ * downloadable file) works identically regardless of which pipeline
+ * actually produced the points.
+ */
+export function summarizePoints(points: DstPoint[], widthMm: number, heightMm: number): RealStitchPlan {
+  let stitches = 0;
+  let jumps = 0;
+  let colorChanges = 0;
+  let threadLenMm = 0;
+  let cx = 0;
+  let cy = 0;
+  let have = false;
+
+  for (const p of points) {
+    if (p.command === 'colorChange') {
+      colorChanges++;
+      continue;
+    }
+    if (have) {
+      const distMm = Math.hypot(p.x - cx, p.y - cy) / 10;
+      if (p.command === 'stitch') {
+        stitches++;
+        threadLenMm += distMm;
+      } else if (p.command === 'jump') {
+        jumps++;
+      }
+    }
+    cx = p.x;
+    cy = p.y;
+    have = true;
+  }
+
+  const estimatedThreadMeters = Math.round((threadLenMm / 1000) * 100) / 100;
+  // ~700 stitches/minute average real-machine throughput including stops/color changes
+  const estimatedTimeMinutes = Math.max(0.1, Math.round((stitches / 700) * 10) / 10);
+
+  return {
+    points,
+    stitches,
+    colors: colorChanges + 1,
+    threadChanges: colorChanges,
+    jumps,
+    trims: 0,
+    estimatedThreadMeters,
+    estimatedTimeMinutes,
+    sizeMm: { width: widthMm, height: heightMm },
+  };
+}
+
+/**
  * Full pipeline: analyzes the real artwork into per-color fill segments,
  * then converts those into a real, physical, downloadable stitch plan.
  */

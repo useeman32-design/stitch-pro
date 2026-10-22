@@ -18,17 +18,35 @@ interface EmbossedStitchCanvasProps {
 // getting unwieldy for a typical 20-150mm design.
 const PX_PER_MM = 10;
 
-// Above this many *visible* segments, drop the 3-layer emboss treatment
-// down to a single gradient stroke (still colored/shaded, just no
-// separate shadow/highlight passes) to keep native SVG element counts
-// reasonable during a live progress animation.
+// Real embroidery is made of many short individual stitches, not one long
+// continuous line -- a long straight stroke reads as "a drawn line" no
+// matter how it's shaded, which was exactly the "not just lines" feedback
+// this rewrite addresses. Every renderable run gets chopped into dashes
+// around this long before it's drawn, each with its own small gap, so
+// consecutive stitches read as individually raised and slightly separated
+// -- the actual visual signature of real thread, not a filter applied to
+// one shape.
+const STITCH_LEN_MM = 2.6;
+const STITCH_GAP_MM = 0.5;
+
+// Above this many *visible* dashes, drop the 3-layer emboss treatment down
+// to a single gradient stroke per dash (still colored/shaded and still
+// visibly separated into individual stitches, just no separate shadow/
+// highlight passes) to keep native SVG element counts reasonable during a
+// live progress animation.
 const EMBOSS_LAYER_CAP = 1200;
-// Above this many visible segments, thin out which ones get drawn at all
+// Above this many visible dashes, thin out which ones get drawn at all
 // while progress is still animating (full fidelity returns once
 // progress >= 1) -- a dense fill design can easily have several thousand
 // stitches, and redrawing all of them ~10x/second is unnecessary for what
 // is, after all, just a preview.
 const DECIMATE_ABOVE = 5000;
+// Above this many *pre-dash* raw segments, subdividing every one of them
+// into individual stitches would produce an SVG tree far too large to
+// stay smooth (tens of thousands of elements) -- fall back to one long
+// shaded stroke per raw segment instead, same as this component's
+// original approach, rather than let the page hang.
+const MAX_SEGMENTS_FOR_DASHING = 2500;
 
 function clamp255(v: number): number {
   return Math.max(0, Math.min(255, v));
@@ -60,31 +78,84 @@ function darken(hex: string, amt: number): string {
   return rgbToHex(r * (1 - amt), g * (1 - amt), b * (1 - amt));
 }
 
+interface Dash extends MmSegment {
+  /** Unit vector perpendicular to this dash's own direction -- used to
+   * offset its shadow/sheen strokes *across* the thread's width rather
+   * than along a single fixed page-diagonal, so the highlight sits on
+   * whichever edge of the rounded thread actually faces the light for
+   * that stitch's own orientation. This is what a satin/fill row's
+   * characteristic ribbed sheen pattern actually follows in real
+   * embroidery -- the ridges run with the stitch direction, not with the
+   * page. */
+  nx: number;
+  ny: number;
+}
+
+/**
+ * Chops every segment into short, individually-separated stitch dashes
+ * (see `STITCH_LEN_MM`/`STITCH_GAP_MM` above) -- the single biggest visual
+ * difference between "a rendered line" and "a row of real stitches".
+ */
+function subdivideIntoDashes(segments: MmSegment[]): Dash[] {
+  const out: Dash[] = [];
+  for (const seg of segments) {
+    const dx = seg.x2 - seg.x1;
+    const dy = seg.y2 - seg.y1;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) continue;
+    const ux = dx / len;
+    const uy = dy / len;
+    const nx = -uy;
+    const ny = ux;
+    const steps = Math.max(1, Math.round(len / STITCH_LEN_MM));
+    const pieceLen = len / steps;
+    const trim = Math.min(STITCH_GAP_MM / 2, pieceLen * 0.35);
+    for (let i = 0; i < steps; i++) {
+      const startT = i * pieceLen + trim;
+      const endT = (i + 1) * pieceLen - trim;
+      if (endT <= startT) continue;
+      out.push({
+        x1: seg.x1 + ux * startT,
+        y1: seg.y1 + uy * startT,
+        x2: seg.x1 + ux * endT,
+        y2: seg.y1 + uy * endT,
+        colorIndex: seg.colorIndex,
+        nx,
+        ny,
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Realistic *2D* raised/embossed thread rendering -- not a true 3D scene
  * (no WebGL, no camera, nothing that needs a GPU shader pipeline mobile
- * Expo apps can't reliably ship), just a flat render that *reads* as
- * raised, sheened thread sitting on top of fabric, built from ordinary
- * layered SVG strokes:
+ * Expo apps can't reliably ship), just a flat render built from many short,
+ * individually-raised stitch dashes (not one long line per fill row) so it
+ * actually reads as real stitched thread up close, not a drawn outline:
  *
- *   1. A soft, dark, slightly-offset "shadow" stroke underneath each
- *      stitch -- the offset (not a blur, which react-native-svg's cross-
- *      platform filter support can't be relied on for) is what reads as
- *      "this sits above the fabric surface, casting a small shadow".
- *   2. The real thread-colored stroke, filled with a fixed-direction
- *      (top-left -> bottom-right) linear gradient from a lightened tint
- *      through the base color to a darkened shade -- simulating a single,
- *      consistent light source catching the rounded cross-section of a
- *      strand of thread, the same way every stitch in a real embroidered
- *      patch catches the light from one direction at once.
- *   3. A thin, semi-transparent white "sheen" stroke offset the opposite
- *      way -- the glossy highlight line real thread shows along its lit
- *      edge.
+ *   1. Every design segment is first chopped into short dashes with a
+ *      small gap between each (`subdivideIntoDashes`) -- real embroidery
+ *      is visibly made of individual stitches, and a long unbroken stroke
+ *      reads as "a line" no matter how it's shaded.
+ *   2. Each dash gets a soft, dark shadow stroke offset *across its own
+ *      width* (perpendicular to that dash's direction, not a fixed page
+ *      diagonal) -- what reads as "this sits above the fabric surface,
+ *      catching light on one rounded edge and casting a shadow on the
+ *      other", consistently with the stitch's own orientation the way a
+ *      satin row's ridges actually follow the stitch direction.
+ *   3. The real thread-colored dash itself, filled with a linear gradient
+ *      from a lightened tint through the base color to a darkened shade --
+ *      simulating a single light source catching the rounded cross-section
+ *      of a strand of thread.
+ *   4. A thin, semi-transparent white "sheen" stroke offset the opposite
+ *      way across the dash's width -- the glossy highlight real thread
+ *      shows along its lit edge.
  *
  * Built with react-native-svg so the exact same component (and the exact
- * same visual result) renders on web *and* native -- unlike the HTML
- * <canvas>-only renderer it replaces (see StitchCanvas.tsx), which drew
- * nothing at all on native.
+ * same visual result) renders on web *and* native, rather than relying on
+ * an HTML <canvas>, which has no native equivalent in Expo.
  */
 export function EmbossedStitchCanvas({
   segments,
@@ -120,13 +191,6 @@ export function EmbossedStitchCanvas({
       tip = { x: last.x2, y: last.y2 };
     }
 
-    // Thin out mid-animation redraws of very dense designs; always show
-    // every segment once the stitch-out is actually complete.
-    if (progress < 1 && full.length > DECIMATE_ABOVE) {
-      const step = Math.ceil(full.length / DECIMATE_ABOVE);
-      full = full.filter((_, i) => i % step === 0);
-    }
-
     return { full, partial, tip };
   }, [segments, progress]);
 
@@ -139,10 +203,27 @@ export function EmbossedStitchCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible.tip, widthMm, heightMm]);
 
-  const drawList = useMemo(
+  const rawDrawList = useMemo(
     () => (visible.partial ? [...visible.full, visible.partial] : visible.full),
     [visible.full, visible.partial]
   );
+
+  // Dash every segment into individual stitches (mm space, before scaling
+  // to preview units) unless the raw segment count is too large for that
+  // to stay smooth -- see MAX_SEGMENTS_FOR_DASHING.
+  const dashed = useMemo(
+    () => (rawDrawList.length <= MAX_SEGMENTS_FOR_DASHING ? subdivideIntoDashes(rawDrawList) : null),
+    [rawDrawList]
+  );
+
+  let drawDashes: Dash[] = dashed ?? rawDrawList.map((s) => ({ ...s, nx: 0, ny: 0 }));
+
+  // Thin out mid-animation redraws of very dense designs; always show
+  // every dash once the stitch-out is actually complete.
+  if (progress < 1 && drawDashes.length > DECIMATE_ABOVE) {
+    const step = Math.ceil(drawDashes.length / DECIMATE_ABOVE);
+    drawDashes = drawDashes.filter((_, i) => i % step === 0);
+  }
 
   // `segments` arrive in real mm units (0..widthMm / 0..heightMm) — see
   // gridSegmentsToMm/pointsToMmSegments in stitchPreview.ts — but the SVG
@@ -151,25 +232,25 @@ export function EmbossedStitchCanvas({
   // every stitch inside only the top-left 1/PX_PER_MM (10%) of the canvas,
   // making any design render tiny in the corner instead of filling the
   // stage. Scale into view-space here, once, right before rendering.
-  const scaledDrawList = useMemo(
+  const scaledDashes = useMemo(
     () =>
-      drawList.map((s) => ({
+      drawDashes.map((s) => ({
         ...s,
         x1: s.x1 * PX_PER_MM,
         y1: s.y1 * PX_PER_MM,
         x2: s.x2 * PX_PER_MM,
         y2: s.y2 * PX_PER_MM,
       })),
-    [drawList]
+    [drawDashes]
   );
 
-  const fullEmboss = scaledDrawList.length <= EMBOSS_LAYER_CAP;
+  const fullEmboss = scaledDashes.length <= EMBOSS_LAYER_CAP;
   // Thread width scales gently with design size so a tiny monogram and a
   // large back patch both look proportionate rather than either needle-thin
   // or comically thick.
   const strokeW = Math.max(1.6, Math.min(3.2, PX_PER_MM * 0.22));
-  const shadowOffset = strokeW * 0.4;
-  const highlightOffset = strokeW * 0.22;
+  const shadowOffset = strokeW * 0.42;
+  const highlightOffset = strokeW * 0.24;
 
   return (
     <View style={styles.wrap}>
@@ -204,11 +285,11 @@ export function EmbossedStitchCanvas({
           ))}
         </Defs>
 
-        {/* fabric backdrop */}
+        {/* fabric backdrop with a woven cross-hatch texture */}
         <Rect x={0} y={0} width={viewW} height={viewH} fill="#F4F3EF" />
         {Array.from({ length: Math.ceil(viewW / (PX_PER_MM * 0.9)) }).map((_, i) => (
           <Line
-            key={`weave-${i}`}
+            key={`weave-v-${i}`}
             x1={i * PX_PER_MM * 0.9}
             y1={0}
             x2={i * PX_PER_MM * 0.9}
@@ -217,25 +298,37 @@ export function EmbossedStitchCanvas({
             strokeWidth={0.6}
           />
         ))}
+        {Array.from({ length: Math.ceil(viewH / (PX_PER_MM * 0.9)) }).map((_, i) => (
+          <Line
+            key={`weave-h-${i}`}
+            x1={0}
+            y1={i * PX_PER_MM * 0.9}
+            x2={viewW}
+            y2={i * PX_PER_MM * 0.9}
+            stroke="rgba(180,178,168,0.22)"
+            strokeWidth={0.6}
+          />
+        ))}
 
-        {/* shadow pass -- gives the raised/embossed look */}
+        {/* shadow pass -- gives each dash its raised/embossed look, offset
+            across its OWN width rather than a fixed page diagonal */}
         {!fullEmboss
           ? null
-          : scaledDrawList.map((s, i) => (
+          : scaledDashes.map((s, i) => (
               <Line
                 key={`shadow-${i}`}
-                x1={s.x1 + shadowOffset}
-                y1={s.y1 + shadowOffset}
-                x2={s.x2 + shadowOffset}
-                y2={s.y2 + shadowOffset}
-                stroke="rgba(10,10,20,0.28)"
+                x1={s.x1 + s.nx * shadowOffset}
+                y1={s.y1 + s.ny * shadowOffset}
+                x2={s.x2 + s.nx * shadowOffset}
+                y2={s.y2 + s.ny * shadowOffset}
+                stroke="rgba(10,10,20,0.3)"
                 strokeWidth={strokeW * 1.1}
                 strokeLinecap="round"
               />
             ))}
 
-        {/* main thread-colored pass */}
-        {scaledDrawList.map((s, i) => (
+        {/* main thread-colored pass -- one dash per stitch */}
+        {scaledDashes.map((s, i) => (
           <Line
             key={`body-${i}`}
             x1={s.x1}
@@ -248,18 +341,18 @@ export function EmbossedStitchCanvas({
           />
         ))}
 
-        {/* sheen pass -- thin bright highlight along the lit edge */}
+        {/* sheen pass -- thin bright highlight along each dash's own lit edge */}
         {!fullEmboss
           ? null
-          : scaledDrawList.map((s, i) => (
+          : scaledDashes.map((s, i) => (
               <Line
                 key={`sheen-${i}`}
-                x1={s.x1 - highlightOffset}
-                y1={s.y1 - highlightOffset}
-                x2={s.x2 - highlightOffset}
-                y2={s.y2 - highlightOffset}
-                stroke="rgba(255,255,255,0.4)"
-                strokeWidth={Math.max(0.6, strokeW * 0.32)}
+                x1={s.x1 - s.nx * highlightOffset}
+                y1={s.y1 - s.ny * highlightOffset}
+                x2={s.x2 - s.nx * highlightOffset}
+                y2={s.y2 - s.ny * highlightOffset}
+                stroke="rgba(255,255,255,0.42)"
+                strokeWidth={Math.max(0.6, strokeW * 0.3)}
                 strokeLinecap="round"
               />
             ))}

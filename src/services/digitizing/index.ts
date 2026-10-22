@@ -36,6 +36,7 @@ export type FabricType = 'Cotton Twill' | 'Denim' | 'Fleece' | 'Leather' | 'Knit
 export type StitchDensity = 'Light' | 'Standard' | 'Dense';
 export type DesignSize = 'Small' | 'Medium' | 'Large' | 'Custom';
 export type SizeUnit = 'mm' | 'cm' | 'in';
+export type StitchStyle = 'fill' | 'cross';
 
 export interface DigitizeSettings {
   placement: Placement;
@@ -49,6 +50,12 @@ export interface DigitizeSettings {
   sizeUnit: SizeUnit;
   widthMm: number;
   heightMm: number;
+  /** "fill" (tatami rows, default -- best for most logos/graphics) or
+   * "cross" (a grid of X's -- better for a deliberately pixelated/sampler-
+   * style design). See stitchpro-backend's digitizer/pipeline.py. */
+  stitchStyle: StitchStyle;
+  /** Stitch/grid direction in degrees, 0-179. */
+  angleDeg: number;
 }
 
 export const defaultDigitizeSettings: DigitizeSettings = {
@@ -62,6 +69,8 @@ export const defaultDigitizeSettings: DigitizeSettings = {
   sizeUnit: 'mm',
   widthMm: 90,
   heightMm: 90,
+  stitchStyle: 'fill',
+  angleDeg: 0,
 };
 
 const sizePresets: Record<Exclude<DesignSize, 'Custom'>, { width: number; height: number }> = {
@@ -75,6 +84,34 @@ export function densityPercentToBucket(percent: number): StitchDensity {
   if (percent > 66) return 'Dense';
   return 'Standard';
 }
+
+/** Stitch length along a row -- same meaning (and same real numbers) the
+ * legacy client-only pipeline already used for its RUNNING-stitch
+ * subdivision, reused here so switching between the client fallback and
+ * the real backend pipeline doesn't change the *meaning* of "density" the
+ * user already understands. */
+export const DENSITY_STITCH_LENGTH_MM: Record<StitchDensity, number> = {
+  Light: 4,
+  Standard: 3,
+  Dense: 2,
+};
+
+/** FILL row spacing in mm -- tighter spacing = a denser, more solid-
+ * looking fill. Separate from stitch *length* above (which only affects
+ * travel along a row, not how close together the rows themselves are). */
+export const DENSITY_FILL_SPACING_MM: Record<StitchDensity, number> = {
+  Light: 0.55,
+  Standard: 0.4,
+  Dense: 0.28,
+};
+
+/** CROSS_STITCH grid cell size in mm -- smaller cells = a denser, more
+ * detailed cross-stitch texture (at the cost of more individual X's). */
+export const DENSITY_CROSS_CELL_MM: Record<StitchDensity, number> = {
+  Light: 2.4,
+  Standard: 1.8,
+  Dense: 1.3,
+};
 
 const UNIT_TO_MM: Record<SizeUnit, number> = { mm: 1, cm: 10, in: 25.4 };
 

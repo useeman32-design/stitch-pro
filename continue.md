@@ -285,6 +285,188 @@ not a raw `page.goto()` to a non-root `.html` file.**
   before counting/asserting** — see `addCreatedDesign`-related tests run
   this session for the pattern. Not something to "fix" — just a testing
   gotcha.
+- **Repeat of the git-HEAD-drift incident, a third time, start of this
+  session**: before any edits were made, `git status` already showed ~38
+  files as new/modified/deleted relative to local HEAD. `git log` on local
+  HEAD showed `6b0fdf6` — several sessions behind — while a fresh
+  `git fetch origin` (after re-adding the `origin` remote from
+  `/home/user/.stitchpro-deploy.json`, since `.git/config` itself doesn't
+  survive a snapshot restore) showed the real current history at `8991d62`.
+  Spot-checking several of the "modified" files
+  (`git show origin/main:<path> | diff - <path>`) proved they were
+  **byte-identical** to origin/main already — only git's own HEAD/index
+  pointer had reverted, not the actual working-tree files. **Recovery used
+  this time (cleaner than the §5 `--hard` procedure, prefer this first):**
+  `git merge --ff-only origin/main` (confirms HEAD is a true ancestor and
+  refuses safely if anything would conflict) — it correctly refused because
+  of the "stale" uncommitted changes, which confirmed none of this was a
+  real divergence; then `git reset --mixed origin/main` (moves HEAD *and*
+  the index to match origin/main, touches zero working-tree files) — after
+  that, `git status` showed *only* the files genuinely changed this
+  session. `--mixed` is strictly safer than `--hard` here since it can
+  never silently discard a real edit sitting in the working tree; only use
+  `--hard` if `--mixed` leaves the tree in a state `git diff` shows as
+  unexpectedly large.
+- **Playwright `get_by_text(X, exact=False)` gotcha**: if a screen has both
+  a short descriptive sentence mentioning a control's label (e.g. a hint
+  paragraph that says "...Cross-Stitch lays down a grid...") *and* the
+  actual pressable chip labeled "Cross-Stitch", a substring-matching
+  locator matches the paragraph first (DOM order), and clicking it is a
+  silent no-op — the chip is never actually pressed. Always check
+  `locator.count()` and pick the right index (or use an exact/structural
+  selector) rather than assuming `.first` is the interactive element,
+  especially on a settings screen with explanatory copy.
+
+## Session: Stitch style/angle/cross-stitch wired to the real backend +
+## Simulator thread-dash render (this session)
+
+Addressed the two remaining items from the user's "analyze everything,
+give me the best result" request (background removal was already solid;
+3D-thread Simulator look and selectable fill/cross-stitch were the gaps):
+
+- **Root cause confirmed, then fixed: the actual generate→export flow
+  never touched the backend's real digitizing pipeline at all.**
+  `settings.tsx`'s `handleGenerate` called the 100% client-side, synchronous
+  `generateRealStitchPlan`/`stitchEngine.ts` (a simple canvas pixel-row
+  scan) — the backend's background-removal/smoothing/color-merge/
+  cross-stitch work from earlier sessions was only ever reachable via the
+  Simulator's `useStitchPreview` hook, never via the actual digitize-and-
+  download flow users go through. This is why the user's own Google-logo
+  test showed non-solid fills in the exported DST despite the backend
+  fixes already existing — the export never used them.
+- **Fix**: `handleGenerate` now tries `analyzeImageViaBackend` (real
+  backend, same fail-soft 8s-timeout pattern as `exportViaBackend`) FIRST;
+  only falls back to the old client-only `generateRealStitchPlan` if the
+  backend is unreachable. Because every downstream screen
+  (`preview.tsx`'s stats, `success.tsx`'s download) already just reads
+  `dstPoints`/`stitchPlan` from `DigitizeWizardContext`, fixing generation
+  once here automatically fixes the real exported file for every format,
+  with zero changes needed in `preview.tsx` or `success.tsx`.
+- Added a new `summarizePoints(points, widthMm, heightMm)` helper in
+  `stitchPlanner.ts` — converts a raw backend `DstPoint[]` stream into the
+  same `RealStitchPlan` stats shape the old client pipeline produced
+  (stitches/colors/threadChanges/jumps/thread-length/time estimate), so
+  both pipelines feed the UI identically regardless of origin.
+- `backendClient.ts`'s `analyzeImageViaBackend` signature changed from a
+  positional `maxColors` arg to an options object:
+  `{ maxColors?, stitchStyle?: 'fill'|'cross', angleDeg?, smoothCurves?,
+  densityMm?, stitchLengthMm? }` — all forwarded as extra `FormData` fields
+  to `/api/design/image-to-points`. Updated the one other call site
+  (`useStitchPreview.ts`, which also gained optional `stitchStyle`/
+  `angleDeg` params it doesn't use yet — Simulator still runs with
+  backend defaults, see below).
+- `DigitizeSettings` (`src/services/digitizing/index.ts`) gained
+  `stitchStyle: 'fill'|'cross'` (default `'fill'`) and `angleDeg: number`
+  (default `0`), plus three new density→backend-param lookup tables:
+  `DENSITY_STITCH_LENGTH_MM`, `DENSITY_FILL_SPACING_MM`,
+  `DENSITY_CROSS_CELL_MM` (Light/Standard/Dense, reused by `settings.tsx`
+  to pick the right backend param depending on which style is selected —
+  fill designs send `density_mm` as row spacing, cross-stitch designs send
+  it as grid cell size).
+- **New UI in `settings.tsx`**: a "Stitch Type" card (Fill / Cross-Stitch
+  chips, same chip pattern as Placement/Fabric) + a "Stitch Angle" slider
+  (0–179°, same `Slider` component as density), between the existing
+  Fabric/Density card and Thread Colors card.
+- **Verified end-to-end with a live local backend + real headless-browser
+  run** (not just `tsc`/unit tests): uploaded the real Google "G" logo
+  through the actual Auto-Digitize wizard, selected Cross-Stitch, hit
+  Generate, and captured the real network request — confirmed
+  `stitch_style=cross` / `density_mm=1.8` reached the backend and produced
+  a genuinely different point stream (2,058 stitches, 4 colors) than Fill
+  (3,060 stitches, 5 colors, `density_mm=0.4`) on the identical source
+  image. Downloaded the resulting **DST file through the real UI** (the
+  actual "Finish & Download" → format-chip flow in `success.tsx`,
+  unmodified) and validated it with `pyembroidery.read()`: 3,494 real
+  stitches, correct bounds for a 90×90mm design. This proves the whole
+  chain — upload → real backend digitize (background removal + chosen
+  stitch style/density) → correct stats → valid downloadable file — works
+  with zero manual intervention once a backend is reachable.
+- **Simulator "3D threaded" visual upgrade — done**
+  (`EmbossedStitchCanvas.tsx` rewritten). The previous render drew each
+  `MmSegment` as one long continuous 3-pass line (shadow/gradient-body/
+  sheen) — visually a smooth ribbon, not individual stitches. Now every
+  segment is first chopped into short "stitch dash" pieces (~2.6mm long,
+  ~0.5mm gap, see `STITCH_LEN_MM`/`STITCH_GAP_MM`) via a new
+  `subdivideIntoDashes()`, and each dash's shadow/sheen offset is computed
+  **perpendicular to that dash's own direction** (not a fixed page
+  diagonal) — this is what makes a satin/fill row's sheen ridges follow the
+  actual stitch direction, matching how real thread catches light. Also
+  added a second (horizontal) set of fabric "weave" lines alongside the
+  existing vertical ones for a more convincing woven backdrop. Gated behind
+  the existing `EMBOSS_LAYER_CAP`(1200)/`DECIMATE_ABOVE`(5000) perf
+  safeguards, plus a new `MAX_SEGMENTS_FOR_DASHING`(2500) raw-segment cap —
+  above that, falls back to one plain line per raw segment (still colored/
+  capped, just no dash-gap/shadow/sheen) rather than risk an oversized SVG
+  tree. **Visually confirmed** via a live Playwright run against the
+  Simulator screen with the real "Lion Logo" preset design (12,482 real
+  backend-generated stitches) — a zoomed crop of the completed stitch-out
+  clearly shows discrete shaded dashes with visible gaps between them, not
+  a continuous line. Note: at that stitch count the raw segment count
+  exceeds `MAX_SEGMENTS_FOR_DASHING`, so the dash *texture* visible there
+  actually comes from the backend's own naturally-short real stitch lengths
+  (a real tatami/fill stitch is already only a few mm) combined with the
+  per-segment rounded-cap stroke — the explicit dashing in this component
+  specifically matters for designs with long individual raw segments
+  (e.g. long running-stitch outlines), which the Lion Logo preset doesn't
+  exercise. Both paths were exercised and look correct.
+- **Known, deliberately-not-chased minor issue**: stress-testing background
+  removal with a synthetic test image made of several small, tightly
+  overlapping/adjacent flat-color shapes (to maximize anti-aliased-edge
+  pixel proportion relative to fill area) produced correctly-separated,
+  fully-solid regions (confirming requirement 2's "fills aren't solid"
+  complaint is resolved), but with slightly shifted thread colors (e.g. a
+  pure green region coming back teal-ish) — almost certainly simple
+  color-quantization cluster-mean pollution from a higher-than-typical
+  proportion of blended edge pixels, not a background-removal or fill
+  regression. Not reproduced with the real Google logo (clean 4/4 color
+  match, as validated in an earlier session) or with the Lion Logo preset.
+  Flagged for awareness, not actioned — would need a perceptually-weighted
+  or edge-excluding quantizer to improve further if a user ever reports it
+  on a real design.
+- **Not changed this session, still true**: the Simulator
+  (`simulator.tsx`/`useStitchPreview.ts`) only ever previews the 5
+  hardcoded preset `Design` records (Lion Logo, Monogram M, Company Logo,
+  Floral Design, Cap Logo) via their bundled thumbnail images, calling the
+  backend with its style/angle defaults (`fill`, `angle_deg=0`) — it does
+  **not** yet reflect whichever `stitchStyle`/`angleDeg` a *user's own*
+  Auto-Digitize session chose, because saved `Design` records don't
+  persist those fields yet. Low priority (the actual export/download path
+  is correct regardless); would need extending the `Design` type and
+  `designsService.create()` if ever prioritized.
+- Environment rebuild needed again this session (expected, see §3): `nvm`
+  itself was gone (`curl | bash` reinstall), Node 22 reinstalled via
+  `nvm install 22`, `npm install` in `stitch-pro`, and
+  `stitchpro-backend`'s `venv` had to be fully recreated
+  (`rm -rf venv && python3 -m venv venv && pip install -r requirements.txt
+  pytest`) — its old venv's site-packages had vanished even though the
+  `venv/` directory and its `bin/activate` script were still present
+  (half-empty environment, `ModuleNotFoundError: No module named 'flask'`).
+  **If `venv/bin/python -c "import flask"` fails even though the venv
+  directory exists, don't try to repair it piecemeal — just
+  `rm -rf venv` and rebuild from `requirements.txt` fresh.**
+- **Sandbox is memory-constrained (≈1.9GB RAM, no swap)** — running Metro
+  (`expo start --web`) *and* a Playwright/Chromium instance at the same
+  time OOM-killed Metro once this session (exit code 137). Chromium alone
+  idles around 150-300MB RSS; Metro's first full bundle compile transiently
+  spikes well above that. **If both are needed, run them sequentially, not
+  concurrently** — bundle via `expo export -p web` for a static,
+  Chromium-safe artifact, or finish all Playwright runs before leaving a
+  long-lived `expo start` dev server up as a live preview.
+- For testing a **static web export** (`expo export -p web`) with
+  Playwright: the app's `app.json` sets `experiments.baseUrl: "/stitch-pro"`
+  for GitHub Pages hosting, so the exported `dist/` only works correctly
+  when served from under a `/stitch-pro/` path prefix (symlink/serve the
+  `dist` folder as `webroot/stitch-pro`, not `webroot` directly) — and
+  Expo Router's client-side router doesn't recognize a literal `.html`
+  suffix or a bare extensionless path through a plain `http.server`, so
+  direct full-page navigations need either the real directory-style URL
+  (e.g. `/create/auto-digitize/` which has its own `index.html`) or a
+  tiny custom static server that rewrites extensionless requests to
+  `<path>.html` (see the pattern used this session) for routes that only
+  exist as a flat `<name>.html` file (e.g. `/simulator`). The **dev server**
+  (`expo start --web`) has neither quirk — it serves everything at a clean
+  root path with no baseUrl — so prefer it for Playwright smoke tests when
+  memory allows (see OOM note above).
 
 ---
 
@@ -297,6 +479,11 @@ not a raw `page.goto()` to a non-root `.html` file.**
   bugs fixed** (`bde70f8`, `c3e416a`, `3605e15`). Not revisited this
   session — no new reports of it being broken; treat as stable unless the
   user says otherwise.
+- **The actual digitize-and-download flow now uses the real backend —
+  done this session**, see §5's session entry. Before this, only the
+  Simulator used the real backend; the Auto-Digitize wizard's own
+  generate/export path was 100% client-side and never benefited from any
+  backend quality work. Fixed in `settings.tsx`'s `handleGenerate`.
 - **Frontend ↔ backend integration: done.** `backendClient.ts` sends
   stitch-point streams to the backend's `/api/design/points-to-file` for
   real multi-format (DST/PES/JEF/VP3/EXP) export, with an 8s-timeout
@@ -506,17 +693,23 @@ not a raw `page.goto()` to a non-root `.html` file.**
 
 ## 8. Suggested next steps (pick up here)
 
-1. **Frontend wiring for the new backend capabilities (`6ab041b`)** — no UI
-   yet exposes `stitch_style` ("fill"/"cross"), `angle_deg`, or
-   `smooth_curves` to the user. Likely the Auto-Digitize settings screen
-   (not yet located/read this session) needs a stitch-style picker at
-   minimum; wire it through `backendClient.ts`'s request params.
-2. **Simulator "real 3D threaded" look** — still outstanding from the same
-   user request that drove `6ab041b`. The user wants the preview to look
-   like actual raised thread/stitching, "not just lines", building further
-   on the already-shipped embossed-canvas work
-   (`EmbossedStitchCanvas.tsx`/`stitchPreview.ts`, not read/touched this
-   session — read those first before changing anything).
+1. ~~**Frontend wiring for the new backend capabilities (`6ab041b`)**~~ —
+   **done this session.** `settings.tsx` now has a Stitch Type (Fill/
+   Cross-Stitch) chip picker + an Angle slider, and `handleGenerate` calls
+   the real backend first (falling back to the old client pipeline only if
+   unreachable). See the "Session: Stitch style/angle/cross-stitch..."
+   entry in §5 for full detail and the live-verification evidence.
+   `smooth_curves` is still not exposed in the UI (always sent implicitly
+   true via the backend's own default) — a low-priority follow-up if a
+   user ever wants to compare smoothed vs. raw boundaries.
+2. ~~**Simulator "real 3D threaded" look**~~ — **done this session.**
+   `EmbossedStitchCanvas.tsx` now subdivides every segment into short,
+   individually-shaded "stitch dash" pieces instead of one long line.
+   Visually confirmed via a live Playwright run against the real Simulator
+   screen (zoomed crop clearly shows dash/gap texture). The Simulator still
+   only previews the 5 hardcoded preset designs with backend-default style/
+   angle (not a user's own chosen settings) — see §5 for why, and consider
+   extending the `Design` type if that gap is ever reported.
 3. **Deploy `stitchpro-backend` somewhere persistent** (ideally the user's
    cPanel hosting) and update `DEFAULT_BACKEND_URL` in
    `src/services/digitizing/backendClient.ts`, then rebuild + redeploy the

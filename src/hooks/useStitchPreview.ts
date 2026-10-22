@@ -36,7 +36,14 @@ const EMPTY: Omit<StitchPreviewResult, 'loading' | 'source'> = {
  * callers should show a friendly explanation in that case (see
  * simulator.tsx), not treat it as a bug.
  */
-export function useStitchPreview(source: any, widthMm: number, heightMm: number, maxColors = 6): StitchPreviewResult {
+export function useStitchPreview(
+  source: any,
+  widthMm: number,
+  heightMm: number,
+  maxColors = 6,
+  stitchStyle?: 'fill' | 'cross',
+  angleDeg?: number
+): StitchPreviewResult {
   const uri = resolveImageUri(source);
   const [state, setState] = useState<StitchPreviewResult>({ ...EMPTY, loading: !!uri, source: 'none' });
 
@@ -47,7 +54,8 @@ export function useStitchPreview(source: any, widthMm: number, heightMm: number,
     setState((s) => ({ ...s, loading: true }));
 
     (async () => {
-      const backendResult = await analyzeImageViaBackend(uri, widthMm, heightMm, maxColors);
+      const backendResult = await analyzeImageViaBackend(uri, widthMm, heightMm, { maxColors, stitchStyle, angleDeg });
+
       if (cancelled) return;
       if (backendResult) {
         setState({
@@ -90,7 +98,7 @@ export function useStitchPreview(source: any, widthMm: number, heightMm: number,
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uri, widthMm, heightMm, maxColors]);
+  }, [uri, widthMm, heightMm, maxColors, stitchStyle, angleDeg]);
 
   if (!uri) {
     return { ...EMPTY, loading: false, source: 'none' };

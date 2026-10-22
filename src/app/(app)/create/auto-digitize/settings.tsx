@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Shirt, Ruler, Layers, Palette, Plus, Repeat, Trash2 } from 'lucide-react-native';
+import { Shirt, Ruler, Layers, Palette, Plus, Repeat, Trash2, Grid3x3 } from 'lucide-react-native';
 import { colors, radius, spacing, typography } from '@/theme';
 import { ScreenContainer } from '@/components/layout/ScreenContainer';
 import { Card } from '@/components/ui/Card';
@@ -15,6 +15,9 @@ import { WizardStepHeader } from '@/components/create/WizardStepHeader';
 import { WizardFooter } from '@/components/create/WizardFooter';
 import { useDigitizeWizard } from '@/contexts/DigitizeWizardContext';
 import {
+  DENSITY_CROSS_CELL_MM,
+  DENSITY_FILL_SPACING_MM,
+  DENSITY_STITCH_LENGTH_MM,
   digitizingService,
   mmToUnit,
   unitToMm,
@@ -22,10 +25,17 @@ import {
   type FabricType,
   type Placement,
   type SizeUnit,
+  type StitchStyle,
 } from '@/services/digitizing';
 import { threadsService } from '@/services/threads';
 import type { ThreadColor } from '@/services/types';
-import { generateRealStitchPlan } from '@/utils/stitchPlanner';
+import { analyzeImageViaBackend } from '@/services/digitizing/backendClient';
+import { generateRealStitchPlan, summarizePoints } from '@/utils/stitchPlanner';
+
+const stitchStyles: { label: string; value: StitchStyle }[] = [
+  { label: 'Fill', value: 'fill' },
+  { label: 'Cross-Stitch', value: 'cross' },
+];
 
 const placements: Placement[] = ['Left Chest', 'Center Front', 'Full Back', 'Sleeve', 'Cap Front', 'Custom'];
 const fabrics: FabricType[] = ['Cotton Twill', 'Denim', 'Fleece', 'Leather', 'Knit / Jersey', 'Custom'];
@@ -62,6 +72,7 @@ export default function DesignSettingsScreen() {
     settings,
     updateSettings,
     threadColors,
+    setThreadColors,
     addThreadColor,
     removeThreadColor,
     replaceThreadColor,
@@ -107,10 +118,53 @@ export default function DesignSettingsScreen() {
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      // Real pipeline: turns the actual analyzed artwork into a real,
-      // physical stitch sequence (see stitchPlanner.ts) — the numbers shown
-      // from here on and the eventual .dst download are the same data,
-      // not a separate estimate.
+      // Real digitizing, preferred path: the actual stitchpro-backend
+      // engine (digitizer/pipeline.py) -- real background/material
+      // removal (works on a photographed design on a real garment, not
+      // just flat artwork), adaptive curve smoothing, a genuinely solid
+      // fill (or a real cross-stitch grid, if selected), not an estimate.
+      // Every screen downstream (preview stats, the actual downloadable
+      // file in success.tsx) reads from the same `dstPoints`/`stitchPlan`
+      // this sets, so picking the backend here is what makes the *real
+      // exported file* benefit from all of that, not just a preview.
+      const densityMm = settings.stitchStyle === 'cross'
+        ? DENSITY_CROSS_CELL_MM[settings.density]
+        : DENSITY_FILL_SPACING_MM[settings.density];
+      const backendResult = artwork?.uri
+        ? await analyzeImageViaBackend(artwork.uri, settings.widthMm, settings.heightMm, {
+            maxColors: 6,
+            stitchStyle: settings.stitchStyle,
+            angleDeg: settings.angleDeg,
+            densityMm,
+            stitchLengthMm: DENSITY_STITCH_LENGTH_MM[settings.density],
+          })
+        : null;
+
+      if (backendResult) {
+        const summary = summarizePoints(backendResult.points, backendResult.widthMm, backendResult.heightMm);
+        setStitchPlan({
+          stitches: summary.stitches,
+          colors: summary.colors,
+          estimatedThreadMeters: summary.estimatedThreadMeters,
+          estimatedTimeMinutes: summary.estimatedTimeMinutes,
+          threadChanges: summary.threadChanges,
+          jumps: summary.jumps,
+          trims: summary.trims,
+          sizeMm: summary.sizeMm,
+        });
+        setDstPoints(summary.points);
+        if (backendResult.threads.length) setThreadColors(backendResult.threads);
+        setGenerating(false);
+        router.push('/create/auto-digitize/preview');
+        return;
+      }
+
+      // Fallback: the backend is unreachable/disabled/timed out, or found
+      // no detectable foreground. Keeps the wizard usable with zero
+      // backend configured -- the legacy client-only pipeline (real, just
+      // a simpler pixel-row fill scan, no background removal/smoothing/
+      // cross-stitch) still produces a genuinely stitchable, downloadable
+      // design either way.
       const palette = threadColors.length ? threadColors : (analysis?.dominantColors ?? ['#5B4FE8']);
       const real = await generateRealStitchPlan(
         artwork?.uri,
@@ -131,9 +185,10 @@ export default function DesignSettingsScreen() {
       });
       setDstPoints(real.points);
     } catch {
-      // Fallback only if real generation can't run (e.g. image failed to
-      // decode) — keeps the wizard usable, but this path produces no real
-      // downloadable file, so success.tsx must handle a missing dstPoints.
+      // Last-resort fallback only if real generation can't run at all
+      // (e.g. image failed to decode) — keeps the wizard usable, but this
+      // path produces no real downloadable file, so success.tsx must
+      // handle a missing dstPoints.
       const plan = await digitizingService.generateStitchPlan(settings, analysis ?? undefined);
       setStitchPlan(plan);
     }
@@ -244,6 +299,37 @@ export default function DesignSettingsScreen() {
             <Text style={[typography.caption, { color: colors.textTertiary }]}>Standard</Text>
             <Text style={[typography.caption, { color: colors.textTertiary }]}>Dense</Text>
           </View>
+        </Card>
+
+        <Card>
+          <SectionLabel icon={Grid3x3} label="Stitch Type" />
+          <Text style={[typography.bodySmall, styles.threadHint]}>
+            Fill (tatami rows) suits most logos and graphics. Cross-Stitch lays down a grid of X's instead —
+            better for a deliberately pixelated or sampler-style design.
+          </Text>
+          <View style={styles.chipRow}>
+            {stitchStyles.map((s) => (
+              <Chip
+                key={s.value}
+                label={s.label}
+                active={settings.stitchStyle === s.value}
+                onPress={() => updateSettings({ stitchStyle: s.value })}
+              />
+            ))}
+          </View>
+
+          <View style={styles.densityHeaderRow}>
+            <Text style={[typography.bodySmall, styles.subLabel]}>Stitch Angle</Text>
+            <Badge label={`${Math.round(settings.angleDeg)}°`} tone="indigo" />
+          </View>
+          <Slider
+            value={settings.angleDeg}
+            min={0}
+            max={179}
+            step={1}
+            onValueChange={(v) => updateSettings({ angleDeg: v })}
+            accessibilityLabel="Stitch angle"
+          />
         </Card>
 
         <Card>
