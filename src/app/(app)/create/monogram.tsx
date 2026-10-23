@@ -1,22 +1,31 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { PenTool } from 'lucide-react-native';
-import { colors, spacing, typography } from '@/theme';
+import { colors, radius, spacing, typography } from '@/theme';
 import { ScreenContainer } from '@/components/layout/ScreenContainer';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Chip } from '@/components/ui/Chip';
 import { ColorSwatch } from '@/components/ui/ColorSwatch';
-import { EmbroideryPreview } from '@/components/ui/EmbroideryPreview';
+import { EmbossedStitchCanvas } from '@/components/ui/EmbossedStitchCanvas';
 import { ThreadColorModal } from '@/components/create/ThreadColorModal';
 import { WizardStepHeader } from '@/components/create/WizardStepHeader';
 import { WizardFooter } from '@/components/create/WizardFooter';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useDigitizeWizard } from '@/contexts/DigitizeWizardContext';
+import { useStitchPreview } from '@/hooks/useStitchPreview';
 import { renderMonogramArtwork, type MonogramStyle } from '@/utils/designRenderers';
 
 const STYLES: MonogramStyle[] = ['Classic Interlocking', 'Circle Frame', 'Diamond Frame', 'Stacked Block'];
+
+// Live preview canvas size while the user is still editing letters/style/
+// color, before the real Settings step sets a final design size.
+const LIVE_PREVIEW_SIZE_MM = 70;
+// Debounce real backend digitizing calls while the user is actively typing
+// or dragging a color picker -- without this, every keystroke would fire
+// its own analyze-image request.
+const STITCH_PREVIEW_DEBOUNCE_MS = 450;
 
 export default function MonogramCreateScreen() {
   const router = useRouter();
@@ -29,6 +38,7 @@ export default function MonogramCreateScreen() {
   const [accentColor, setAccentColor] = useState('#D9A441');
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [rendering, setRendering] = useState(true);
+  const [debouncedUri, setDebouncedUri] = useState<string | null>(null);
   const [colorPicker, setColorPicker] = useState<'primary' | 'accent' | null>(null);
   const [continuing, setContinuing] = useState(false);
 
@@ -48,6 +58,23 @@ export default function MonogramCreateScreen() {
       cancelled = true;
     };
   }, [letters, style, primaryColor, accentColor]);
+
+  // Debounce the real stitch-simulation backend call so fast typing /
+  // color dragging doesn't fire one analyze-image request per keystroke.
+  useEffect(() => {
+    if (!previewUri) return undefined;
+    const t = setTimeout(() => setDebouncedUri(previewUri), STITCH_PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [previewUri]);
+
+  const sim = useStitchPreview(
+    debouncedUri ? { uri: debouncedUri } : null,
+    LIVE_PREVIEW_SIZE_MM,
+    LIVE_PREVIEW_SIZE_MM,
+    2,
+    'fill',
+    0
+  );
 
   const handleContinue = async () => {
     setContinuing(true);
@@ -71,13 +98,26 @@ export default function MonogramCreateScreen() {
 
       <View style={[styles.layout, isDesktop && styles.layoutDesktop]}>
         <View style={[styles.previewCol, isDesktop && styles.previewColDesktop]}>
-          {rendering && !previewUri ? (
-            <View style={[styles.loadingBox, { height: isDesktop ? 300 : 240 }]}>
+          <View style={[styles.stage, { height: isDesktop ? 300 : 240 }]}>
+            {rendering && !previewUri ? (
               <ActivityIndicator color={colors.indigo} />
-            </View>
-          ) : previewUri ? (
-            <EmbroideryPreview source={{ uri: previewUri }} height={isDesktop ? 300 : 240} showHoop={false} />
-          ) : null}
+            ) : sim.loading ? (
+              <>
+                <ActivityIndicator color={colors.indigo} />
+                <Text style={[typography.bodySmall, styles.stageHint]}>Rendering stitched preview…</Text>
+              </>
+            ) : sim.source !== 'none' && previewUri ? (
+              <EmbossedStitchCanvas
+                segments={sim.segments}
+                palette={sim.palette}
+                widthMm={sim.widthMm || LIVE_PREVIEW_SIZE_MM}
+                heightMm={sim.heightMm || LIVE_PREVIEW_SIZE_MM}
+                progress={1}
+              />
+            ) : previewUri ? (
+              <Image source={{ uri: previewUri }} style={styles.fallbackImage} resizeMode="contain" />
+            ) : null}
+          </View>
         </View>
 
         <View style={[styles.formCol, isDesktop && styles.formColDesktop]}>
@@ -162,12 +202,21 @@ const styles = StyleSheet.create({
   card: {
     gap: spacing.md,
   },
-  loadingBox: {
+  stage: {
     width: '100%',
-    borderRadius: 18,
+    borderRadius: radius.card,
+    overflow: 'hidden',
     backgroundColor: colors.gray100,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  stageHint: {
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
+  },
+  fallbackImage: {
+    width: '80%',
+    height: '80%',
   },
   sectionLabel: {
     color: colors.textPrimary,

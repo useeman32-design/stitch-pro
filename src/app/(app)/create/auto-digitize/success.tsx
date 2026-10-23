@@ -1,11 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { CheckCircle2, Download, FolderOpen, Plus } from 'lucide-react-native';
 import { colors, radius, spacing, typography } from '@/theme';
 import { ScreenContainer } from '@/components/layout/ScreenContainer';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { EmbossedStitchCanvas } from '@/components/ui/EmbossedStitchCanvas';
 import { StitchStats } from '@/components/ui/StitchStats';
 import { useToast } from '@/components/ui/Toast';
 import { useDigitizeWizard } from '@/contexts/DigitizeWizardContext';
@@ -15,6 +16,7 @@ import { useResponsive } from '@/hooks/useResponsive';
 import { buildDstFile } from '@/utils/dstWriter';
 import { exportViaBackend, type BackendFormat } from '@/services/digitizing/backendClient';
 import { createPersistableThumbnail } from '@/utils/thumbnail';
+import { pointsToMmSegments } from '@/utils/stitchPreview';
 
 const FORMATS: StitchFormat[] = ['DST', 'PES', 'JEF', 'EXP', 'VP3', 'HUS'];
 
@@ -64,9 +66,16 @@ export default function DigitizeSuccessScreen() {
     });
   }, [artwork, stitchPlan]);
 
-  if (!artwork || !stitchPlan) return null;
+  // The real generated stitch path for this exact finished design -- the
+  // same segment-by-segment 3D-threaded render used on the Preview and
+  // Simulator screens -- built straight from the actual dstPoints this
+  // design will export, not a re-fetch, not a flat photo of the artwork.
+  const thumbSegments = useMemo(() => {
+    if (!dstPoints || dstPoints.length === 0 || !stitchPlan) return [];
+    return pointsToMmSegments(dstPoints, stitchPlan.sizeMm.width, stitchPlan.sizeMm.height);
+  }, [dstPoints, stitchPlan]);
 
-  const artworkSource = { uri: artwork.uri };
+  if (!artwork || !stitchPlan) return null;
 
   const triggerBlobDownload = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -147,7 +156,19 @@ export default function DigitizeSuccessScreen() {
 
       <Card style={styles.summaryCard}>
         <View style={styles.summaryRow}>
-          <Image source={artworkSource} style={styles.thumb} resizeMode="cover" />
+          <View style={styles.thumb}>
+            {thumbSegments.length > 0 ? (
+              <EmbossedStitchCanvas
+                segments={thumbSegments}
+                palette={threadColors}
+                widthMm={stitchPlan.sizeMm.width}
+                heightMm={stitchPlan.sizeMm.height}
+                progress={1}
+              />
+            ) : (
+              <CheckCircle2 size={22} color={colors.textTertiary} />
+            )}
+          </View>
           <View style={{ flex: 1 }}>
             <Text style={[typography.cardTitle, { color: colors.textPrimary }]} numberOfLines={1}>
               {artwork.name}
@@ -247,6 +268,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: colors.border,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.gray100,
   },
   divider: {
     height: 1,
