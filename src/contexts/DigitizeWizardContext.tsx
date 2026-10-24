@@ -23,6 +23,16 @@ interface DigitizeWizardValue {
   stitchPlan: StitchPlanSummary | null;
   /** Real, physical stitch sequence (0.1mm units) behind `stitchPlan`'s stats — the exact same points a real .dst export encodes, kept here so download doesn't need to regenerate/re-analyze. */
   dstPoints: DstPoint[] | null;
+  /** Whether to remove the detected background/surrounding material before
+   * digitizing -- set explicitly by the user on the background-removal
+   * preview step (create/auto-digitize/background-removal.tsx), never
+   * silently defaulted without them seeing the result first. Defaults to
+   * `true` (matching the backend's own default) only because that step
+   * hasn't necessarily run yet when this is first read; it's always
+   * overwritten with the user's actual choice before the real digitize
+   * call fires. */
+  removeBackground: boolean;
+  setRemoveBackground: (value: boolean) => void;
   setArtwork: (artwork: UploadedArtwork) => void;
   clearArtwork: () => void;
   setAnalysis: (analysis: AnalysisResult) => void;
@@ -43,6 +53,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
   const [analysis, setAnalysisState] = useState<AnalysisResult | null>(null);
   const [settings, setSettings] = useState<DigitizeSettings>(defaultDigitizeSettings);
   const [threadColors, setThreadColorsState] = useState<string[]>([]);
+  const [removeBackground, setRemoveBackgroundState] = useState(true);
   const [stitchPlan, setStitchPlanState] = useState<StitchPlanSummary | null>(null);
   const [dstPoints, setDstPointsState] = useState<DstPoint[] | null>(null);
 
@@ -80,6 +91,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
     setThreadColorsState([]);
     setStitchPlanState(null);
     setDstPointsState(null);
+    setRemoveBackgroundState(true);
   }, []);
 
   const value = useMemo(
@@ -90,6 +102,8 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       threadColors,
       stitchPlan,
       dstPoints,
+      removeBackground,
+      setRemoveBackground: setRemoveBackgroundState,
       setArtwork: setArtworkState,
       clearArtwork: () => setArtworkState(null),
       setAnalysis,
@@ -109,6 +123,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       threadColors,
       stitchPlan,
       dstPoints,
+      removeBackground,
       setAnalysis,
       updateSettings,
       addThreadColor,

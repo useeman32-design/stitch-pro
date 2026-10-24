@@ -78,6 +78,7 @@ export default function DesignSettingsScreen() {
     replaceThreadColor,
     setStitchPlan,
     setDstPoints,
+    removeBackground,
   } = useDigitizeWizard();
   const [threads, setThreads] = useState<ThreadColor[]>([]);
   const [generating, setGenerating] = useState(false);
@@ -137,6 +138,7 @@ export default function DesignSettingsScreen() {
             angleDeg: settings.angleDeg,
             densityMm,
             stitchLengthMm: DENSITY_STITCH_LENGTH_MM[settings.density],
+            removeBackground,
           })
         : null;
 

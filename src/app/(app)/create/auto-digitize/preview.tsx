@@ -16,7 +16,7 @@ import { useStitchPreview } from '@/hooks/useStitchPreview';
 
 export default function DesignPreviewScreen() {
   const router = useRouter();
-  const { artwork, settings, stitchPlan, threadColors } = useDigitizeWizard();
+  const { artwork, settings, stitchPlan, threadColors, removeBackground } = useDigitizeWizard();
   const { isDesktop } = useResponsive();
 
   useEffect(() => {
@@ -36,7 +36,8 @@ export default function DesignPreviewScreen() {
     settings.heightMm,
     threadColors.length || 6,
     settings.stitchStyle,
-    settings.angleDeg
+    settings.angleDeg,
+    removeBackground
   );
 
   if (!artwork || !stitchPlan) return null;

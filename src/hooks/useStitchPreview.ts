@@ -42,7 +42,8 @@ export function useStitchPreview(
   heightMm: number,
   maxColors = 6,
   stitchStyle?: 'fill' | 'cross',
-  angleDeg?: number
+  angleDeg?: number,
+  removeBackground?: boolean
 ): StitchPreviewResult {
   const uri = resolveImageUri(source);
   const [state, setState] = useState<StitchPreviewResult>({ ...EMPTY, loading: !!uri, source: 'none' });
@@ -54,7 +55,12 @@ export function useStitchPreview(
     setState((s) => ({ ...s, loading: true }));
 
     (async () => {
-      const backendResult = await analyzeImageViaBackend(uri, widthMm, heightMm, { maxColors, stitchStyle, angleDeg });
+      const backendResult = await analyzeImageViaBackend(uri, widthMm, heightMm, {
+        maxColors,
+        stitchStyle,
+        angleDeg,
+        removeBackground,
+      });
 
       if (cancelled) return;
       if (backendResult) {
@@ -98,7 +104,7 @@ export function useStitchPreview(
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uri, widthMm, heightMm, maxColors, stitchStyle, angleDeg]);
+  }, [uri, widthMm, heightMm, maxColors, stitchStyle, angleDeg, removeBackground]);
 
   if (!uri) {
     return { ...EMPTY, loading: false, source: 'none' };

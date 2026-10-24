@@ -164,6 +164,82 @@ export interface AnalyzeImageOptions {
   densityMm?: number;
   /** Target stitch length along a row, in mm. Default 3.0. */
   stitchLengthMm?: number;
+  /** Whether to remove the detected background/surrounding material before
+   * digitizing (default true, matching the backend's own default). Set to
+   * `false` only once the user has explicitly chosen "keep original" on
+   * the background-removal preview step (see
+   * `removeBackgroundPreviewViaBackend` above) -- the server recomputes
+   * the identical mask, so this stays consistent with what they saw. */
+  removeBackground?: boolean;
+}
+
+/** Converts a `Blob` into a `data:` URI -- works identically on web and
+ * native (React Native's `FileReader`/`Blob` polyfills support exactly
+ * this), unlike `URL.createObjectURL`, which isn't reliably available on
+ * native. Used so the background-removal preview PNG below can be handed
+ * straight to `<Image source={{ uri }}>` on any platform. */
+function blobToDataUri(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Asks the real backend to run just its background/surrounding-material
+ * detection (stitchpro-backend's `POST /api/design/remove-background`) on
+ * `imageUri` and returns a displayable `data:` URI with the detected
+ * background made transparent -- no quantizing, segmentation, or stitch
+ * generation, so this is cheap and safe to call right after a user
+ * uploads/picks an image, well before they've configured anything else.
+ *
+ * This is the first half of the "show the user what will be removed and
+ * require an explicit choice before continuing, never silently apply it"
+ * flow (see create/auto-digitize/background-removal.tsx): callers should
+ * show the result next to the original and let the user pick one, then
+ * pass that choice as `removeBackground` to `analyzeImageViaBackend`
+ * below (and ultimately to the export endpoints) -- the server recomputes
+ * the identical mask rather than needing this preview PNG re-uploaded.
+ *
+ * Returns `null` on any failure (backend disabled/unreachable/timeout/
+ * error, or an unreadable image) -- callers should treat that as "no
+ * preview available" and let the user continue with the original image
+ * untouched rather than blocking the wizard on it.
+ */
+export async function removeBackgroundPreviewViaBackend(
+  imageUri: string,
+  maxDim?: number
+): Promise<string | null> {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl || !imageUri) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+
+  try {
+    const imageResponse = await fetch(imageUri);
+    if (!imageResponse.ok) return null;
+    const blob = await imageResponse.blob();
+
+    const form = new FormData();
+    form.append('image', blob as any, 'artwork.png');
+    if (maxDim !== undefined) form.append('max_dim', String(maxDim));
+
+    const response = await fetch(`${baseUrl}/api/design/remove-background`, {
+      method: 'POST',
+      body: form as any,
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const pngBlob = await response.blob();
+    return await blobToDataUri(pngBlob);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function analyzeImageViaBackend(
@@ -196,6 +272,7 @@ export async function analyzeImageViaBackend(
     if (options.smoothCurves !== undefined) form.append('smooth_curves', String(options.smoothCurves));
     if (options.densityMm !== undefined) form.append('density_mm', String(options.densityMm));
     if (options.stitchLengthMm !== undefined) form.append('stitch_length_mm', String(options.stitchLengthMm));
+    if (options.removeBackground !== undefined) form.append('remove_background', String(options.removeBackground));
 
     const response = await fetch(`${baseUrl}/api/design/image-to-points`, {
       method: 'POST',

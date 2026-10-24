@@ -133,7 +133,7 @@ export default function UploadArtworkScreen() {
       <WizardFooter
         continueLabel="Analyze Artwork"
         continueDisabled={!artwork}
-        onContinue={() => router.push('/create/auto-digitize/analyzing')}
+        onContinue={() => router.push('/create/auto-digitize/background-removal')}
       />
     </ScreenContainer>
   );
