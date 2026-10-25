@@ -168,55 +168,72 @@ export function EmbossedStitchCanvas({
   const viewW = Math.max(1, widthMm * PX_PER_MM);
   const viewH = Math.max(1, heightMm * PX_PER_MM);
 
-  const visible = useMemo(() => {
-    const total = segments.length;
-    if (total === 0) return { full: [] as MmSegment[], partial: null as MmSegment | null, tip: null as { x: number; y: number } | null };
+  // Dash every segment into individual stitches, and scale into view-space,
+  // exactly ONCE per design (keyed only on `segments`/dimensions, never on
+  // `progress`) -- see MAX_SEGMENTS_FOR_DASHING for the one case this is
+  // skipped. This used to be the actual root cause of simulator slowness:
+  // the animation driver advances `progress` roughly every 100ms, and this
+  // same chopping-into-dashes + mm-to-view-space scaling work was being
+  // redone from scratch, over the entire *growing* prefix of visible
+  // segments, on every single one of those ticks -- so by the time
+  // playback neared 100% each tick was re-dashing and re-scaling nearly
+  // the whole design's worth of geometry ten times a second. Precomputing
+  // the full dash list once and slicing it per frame below turns that
+  // per-tick cost into an (almost free) array slice instead.
+  const allDashes = useMemo(
+    () => (segments.length <= MAX_SEGMENTS_FOR_DASHING ? subdivideIntoDashes(segments) : segments.map((s) => ({ ...s, nx: 0, ny: 0 }))),
+    [segments]
+  );
 
-    const exact = Math.max(0, Math.min(total, progress * total));
-    const fullCount = Math.floor(exact);
-    const frac = exact - fullCount;
+  const scaledAllDashes = useMemo(
+    () =>
+      allDashes.map((s) => ({
+        ...s,
+        x1: s.x1 * PX_PER_MM,
+        y1: s.y1 * PX_PER_MM,
+        x2: s.x2 * PX_PER_MM,
+        y2: s.y2 * PX_PER_MM,
+      })),
+    [allDashes]
+  );
 
-    let full = segments.slice(0, fullCount);
-    let partial: MmSegment | null = null;
-    let tip: { x: number; y: number } | null = null;
+  // The only per-frame computation now: how far into the precomputed dash
+  // list `progress` currently reaches, plus (for a smoothly-moving needle
+  // tip) a linear interpolation partway through the current in-progress
+  // dash -- both O(1), not a re-walk of the whole design.
+  const total = scaledAllDashes.length;
+  const exact = total === 0 ? 0 : Math.max(0, Math.min(total, progress * total));
+  const fullCount = Math.floor(exact);
+  const frac = exact - fullCount;
 
-    if (fullCount < total && frac > 0) {
-      const seg = segments[fullCount];
-      const x2 = seg.x1 + (seg.x2 - seg.x1) * frac;
-      const y2 = seg.y1 + (seg.y2 - seg.y1) * frac;
-      partial = { ...seg, x2, y2 };
-      tip = { x: x2, y: y2 };
-    } else if (fullCount > 0) {
-      const last = full[full.length - 1];
-      tip = { x: last.x2, y: last.y2 };
+  const partialDash = useMemo(() => {
+    if (fullCount >= total || frac <= 0) return null;
+    const d = scaledAllDashes[fullCount];
+    return { ...d, x2: d.x1 + (d.x2 - d.x1) * frac, y2: d.y1 + (d.y2 - d.y1) * frac };
+  }, [scaledAllDashes, fullCount, frac, total]);
+
+  const tip = useMemo(() => {
+    if (partialDash) return { x: partialDash.x2 / PX_PER_MM, y: partialDash.y2 / PX_PER_MM };
+    if (fullCount > 0) {
+      const last = scaledAllDashes[fullCount - 1];
+      return { x: last.x2 / PX_PER_MM, y: last.y2 / PX_PER_MM };
     }
-
-    return { full, partial, tip };
-  }, [segments, progress]);
+    return null;
+  }, [partialDash, scaledAllDashes, fullCount]);
 
   React.useEffect(() => {
-    if (visible.tip) {
-      onNeedlePosition?.({ xPct: (visible.tip.x / Math.max(1, widthMm)) * 100, yPct: (visible.tip.y / Math.max(1, heightMm)) * 100 });
+    if (tip) {
+      onNeedlePosition?.({ xPct: (tip.x / Math.max(1, widthMm)) * 100, yPct: (tip.y / Math.max(1, heightMm)) * 100 });
     } else {
       onNeedlePosition?.(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible.tip, widthMm, heightMm]);
+  }, [tip, widthMm, heightMm]);
 
-  const rawDrawList = useMemo(
-    () => (visible.partial ? [...visible.full, visible.partial] : visible.full),
-    [visible.full, visible.partial]
+  let drawDashes: Dash[] = useMemo(
+    () => (partialDash ? [...scaledAllDashes.slice(0, fullCount), partialDash] : scaledAllDashes.slice(0, fullCount)),
+    [scaledAllDashes, fullCount, partialDash]
   );
-
-  // Dash every segment into individual stitches (mm space, before scaling
-  // to preview units) unless the raw segment count is too large for that
-  // to stay smooth -- see MAX_SEGMENTS_FOR_DASHING.
-  const dashed = useMemo(
-    () => (rawDrawList.length <= MAX_SEGMENTS_FOR_DASHING ? subdivideIntoDashes(rawDrawList) : null),
-    [rawDrawList]
-  );
-
-  let drawDashes: Dash[] = dashed ?? rawDrawList.map((s) => ({ ...s, nx: 0, ny: 0 }));
 
   // Thin out mid-animation redraws of very dense designs; always show
   // every dash once the stitch-out is actually complete.
@@ -225,26 +242,10 @@ export function EmbossedStitchCanvas({
     drawDashes = drawDashes.filter((_, i) => i % step === 0);
   }
 
-  // `segments` arrive in real mm units (0..widthMm / 0..heightMm) — see
-  // gridSegmentsToMm/pointsToMmSegments in stitchPreview.ts — but the SVG
-  // viewBox above is in "preview units" (mm * PX_PER_MM) for stroke/gradient
-  // resolution. Drawing mm coordinates directly against that viewBox put
-  // every stitch inside only the top-left 1/PX_PER_MM (10%) of the canvas,
-  // making any design render tiny in the corner instead of filling the
-  // stage. Scale into view-space here, once, right before rendering.
-  const scaledDashes = useMemo(
-    () =>
-      drawDashes.map((s) => ({
-        ...s,
-        x1: s.x1 * PX_PER_MM,
-        y1: s.y1 * PX_PER_MM,
-        x2: s.x2 * PX_PER_MM,
-        y2: s.y2 * PX_PER_MM,
-      })),
-    [drawDashes]
-  );
+  const scaledDashes = drawDashes;
 
   const fullEmboss = scaledDashes.length <= EMBOSS_LAYER_CAP;
+
   // Thread width scales gently with design size so a tiny monogram and a
   // large back patch both look proportionate rather than either needle-thin
   // or comically thick.
