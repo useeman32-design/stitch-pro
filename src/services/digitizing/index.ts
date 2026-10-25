@@ -38,6 +38,22 @@ export type DesignSize = 'Small' | 'Medium' | 'Large' | 'Custom';
 export type SizeUnit = 'mm' | 'cm' | 'in';
 export type StitchStyle = 'fill' | 'cross';
 
+/** Whether/how to add the satin edge-walk border stitchpro-backend can
+ * trace around a FILL/CROSS_STITCH region's outline (and every hole) on
+ * top of the fill -- see stitchpro-backend's
+ * digitizer/stitches/satin/border.py for why this exists: a scanline fill
+ * alone leaves a jagged staircase edge no matter how dense it is, and a
+ * thin satin column traced along the real vector boundary is what
+ * actually reads as a crisp, professional edge.
+ *   - 'auto' (default): omit the field entirely and let the backend pick
+ *     its own style-appropriate default (1.2mm for Fill, off for
+ *     Cross-Stitch -- a grid of X's already has its own clean edge and
+ *     doesn't need one).
+ *   - 'off': explicitly disable it (sends 0mm), even for Fill.
+ *   - 'custom': send `borderWidthMm` as an explicit override.
+ */
+export type BorderMode = 'auto' | 'off' | 'custom';
+
 export interface DigitizeSettings {
   placement: Placement;
   customPlacement: string;
@@ -56,6 +72,10 @@ export interface DigitizeSettings {
   stitchStyle: StitchStyle;
   /** Stitch/grid direction in degrees, 0-179. */
   angleDeg: number;
+  /** See `BorderMode` above. */
+  borderMode: BorderMode;
+  /** Border width in mm, only meaningful when `borderMode === 'custom'`. */
+  borderWidthMm: number;
 }
 
 export const defaultDigitizeSettings: DigitizeSettings = {
@@ -71,7 +91,10 @@ export const defaultDigitizeSettings: DigitizeSettings = {
   heightMm: 90,
   stitchStyle: 'fill',
   angleDeg: 0,
+  borderMode: 'auto',
+  borderWidthMm: 1.2,
 };
+
 
 const sizePresets: Record<Exclude<DesignSize, 'Custom'>, { width: number; height: number }> = {
   Small: { width: 60, height: 60 },
@@ -112,6 +135,18 @@ export const DENSITY_CROSS_CELL_MM: Record<StitchDensity, number> = {
   Standard: 1.8,
   Dense: 1.3,
 };
+
+/** The actual `border_width_mm` value (or `undefined` to omit the field
+ * entirely) to send to the backend for the current `borderMode`/
+ * `borderWidthMm` settings -- see `BorderMode`'s docstring above for what
+ * each mode means. Centralized here so every caller (the real digitize
+ * call in settings.tsx today, any future one) stays consistent about the
+ * 'auto' => omit-the-field mapping instead of each guessing a number. */
+export function resolveBorderWidthMm(settings: Pick<DigitizeSettings, 'borderMode' | 'borderWidthMm'>): number | undefined {
+  if (settings.borderMode === 'off') return 0;
+  if (settings.borderMode === 'custom') return settings.borderWidthMm;
+  return undefined;
+}
 
 const UNIT_TO_MM: Record<SizeUnit, number> = { mm: 1, cm: 10, in: 25.4 };
 

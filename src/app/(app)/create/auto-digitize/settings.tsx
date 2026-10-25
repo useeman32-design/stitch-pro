@@ -20,7 +20,9 @@ import {
   DENSITY_STITCH_LENGTH_MM,
   digitizingService,
   mmToUnit,
+  resolveBorderWidthMm,
   unitToMm,
+  type BorderMode,
   type DesignSize,
   type FabricType,
   type Placement,
@@ -37,6 +39,15 @@ const stitchStyles: { label: string; value: StitchStyle }[] = [
   { label: 'Cross-Stitch', value: 'cross' },
 ];
 
+const borderModes: { label: string; value: BorderMode }[] = [
+  { label: 'Auto', value: 'auto' },
+  { label: 'Off', value: 'off' },
+  { label: 'Custom', value: 'custom' },
+];
+
+const MIN_BORDER_WIDTH_MM = 0.4;
+const MAX_BORDER_WIDTH_MM = 3;
+
 const placements: Placement[] = ['Left Chest', 'Center Front', 'Full Back', 'Sleeve', 'Cap Front', 'Custom'];
 const fabrics: FabricType[] = ['Cotton Twill', 'Denim', 'Fleece', 'Leather', 'Knit / Jersey', 'Custom'];
 const unitOptions: { label: string; value: SizeUnit }[] = [
@@ -44,6 +55,12 @@ const unitOptions: { label: string; value: SizeUnit }[] = [
   { label: 'cm', value: 'cm' },
   { label: 'in', value: 'in' },
 ];
+
+function borderBadgeLabel(mode: BorderMode, customWidthMm: number): string {
+  if (mode === 'off') return 'Off';
+  if (mode === 'custom') return `${customWidthMm.toFixed(1)}mm`;
+  return 'Auto';
+}
 
 function closestThread(hex: string, threads: ThreadColor[]): ThreadColor | undefined {
   const toRgb = (h: string) => {
@@ -138,6 +155,7 @@ export default function DesignSettingsScreen() {
             angleDeg: settings.angleDeg,
             densityMm,
             stitchLengthMm: DENSITY_STITCH_LENGTH_MM[settings.density],
+            borderWidthMm: resolveBorderWidthMm(settings),
             removeBackground,
           })
         : null;
@@ -332,6 +350,38 @@ export default function DesignSettingsScreen() {
             onValueChange={(v) => updateSettings({ angleDeg: v })}
             accessibilityLabel="Stitch angle"
           />
+
+          <View style={styles.densityHeaderRow}>
+            <Text style={[typography.bodySmall, styles.subLabel]}>Edge Border</Text>
+            <Badge label={borderBadgeLabel(settings.borderMode, settings.borderWidthMm)} tone="indigo" />
+          </View>
+          <Text style={[typography.bodySmall, styles.threadHint]}>
+            Traces a clean satin outline around every region&apos;s edge (and any holes) on top of the fill — hides the
+            staircase edge a scanline fill leaves no matter how dense it is. Auto adds it for Fill, skips it for
+            Cross-Stitch (which already has its own clean grid edge).
+          </Text>
+          <View style={styles.chipRow}>
+            {borderModes.map((m) => (
+              <Chip
+                key={m.value}
+                label={m.label}
+                active={settings.borderMode === m.value}
+                onPress={() => updateSettings({ borderMode: m.value })}
+              />
+            ))}
+          </View>
+          {settings.borderMode === 'custom' && (
+            <View style={{ marginTop: spacing.sm }}>
+              <Slider
+                value={settings.borderWidthMm}
+                min={MIN_BORDER_WIDTH_MM}
+                max={MAX_BORDER_WIDTH_MM}
+                step={0.1}
+                onValueChange={(v) => updateSettings({ borderWidthMm: v })}
+                accessibilityLabel="Border width"
+              />
+            </View>
+          )}
         </Card>
 
         <Card>

@@ -164,6 +164,14 @@ export interface AnalyzeImageOptions {
   densityMm?: number;
   /** Target stitch length along a row, in mm. Default 3.0. */
   stitchLengthMm?: number;
+  /** Width (in mm) of the satin edge-walk border traced around every
+   * FILL/CROSS_STITCH region's outline and holes, on top of the fill --
+   * see stitchpro-backend's digitizer/stitches/satin/border.py. Omit to
+   * use the backend's own style-appropriate default (1.2mm for Fill, off
+   * for Cross-Stitch); pass 0 to disable it even for Fill. See
+   * `resolveBorderWidthMm` in services/digitizing/index.ts for the single
+   * place that maps the wizard's border UI choice to this value. */
+  borderWidthMm?: number;
   /** Whether to remove the detected background/surrounding material before
    * digitizing (default true, matching the backend's own default). Set to
    * `false` only once the user has explicitly chosen "keep original" on
@@ -272,6 +280,7 @@ export async function analyzeImageViaBackend(
     if (options.smoothCurves !== undefined) form.append('smooth_curves', String(options.smoothCurves));
     if (options.densityMm !== undefined) form.append('density_mm', String(options.densityMm));
     if (options.stitchLengthMm !== undefined) form.append('stitch_length_mm', String(options.stitchLengthMm));
+    if (options.borderWidthMm !== undefined) form.append('border_width_mm', String(options.borderWidthMm));
     if (options.removeBackground !== undefined) form.append('remove_background', String(options.removeBackground));
 
     const response = await fetch(`${baseUrl}/api/design/image-to-points`, {
