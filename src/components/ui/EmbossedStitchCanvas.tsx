@@ -236,10 +236,26 @@ export function EmbossedStitchCanvas({
   );
 
   // Thin out mid-animation redraws of very dense designs; always show
-  // every dash once the stitch-out is actually complete.
-  if (progress < 1 && drawDashes.length > DECIMATE_ABOVE) {
-    const step = Math.ceil(drawDashes.length / DECIMATE_ABOVE);
-    drawDashes = drawDashes.filter((_, i) => i % step === 0);
+  // every dash once the stitch-out is actually complete. The decimation
+  // step is deliberately derived from `total` (the design's fixed, final
+  // dash count), never from `drawDashes.length` (how many are visible
+  // *so far*, which keeps growing as playback progresses) -- that was a
+  // real, observed bug: as the visible count crossed each multiple of
+  // DECIMATE_ABOVE, `step` would jump (e.g. 1 -> 2 at 5000), and since
+  // "keep every Nth dash" selects a completely different subset of
+  // indices for a different N, a large fraction of dashes that were
+  // already drawn and visible the previous frame would suddenly fail the
+  // new `i % step === 0` test and vanish in a single frame -- reproduced
+  // directly: crossing 5000 dashes this way instantly hid 2500 of the
+  // 5000 previously-visible stitches. Keying `step` to the stable final
+  // total instead means the exact same subset of indices is kept for the
+  // entire animation, so decimation only ever adds detail as playback
+  // advances, never removes something the user already saw stitched in.
+  if (progress < 1 && total > DECIMATE_ABOVE) {
+    const step = Math.ceil(total / DECIMATE_ABOVE);
+    if (step > 1) {
+      drawDashes = drawDashes.filter((_, i) => i % step === 0);
+    }
   }
 
   const scaledDashes = drawDashes;
