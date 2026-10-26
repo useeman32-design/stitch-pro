@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Play, Pause, RotateCcw, Zap } from 'lucide-react-native';
+import { Play, Pause, RotateCcw, Zap, MousePointerClick, X } from 'lucide-react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { EmbossedStitchCanvas } from '@/components/ui/EmbossedStitchCanvas';
+import { EmbossedStitchCanvas, type SelectedStitchInfo } from '@/components/ui/EmbossedStitchCanvas';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useStitchPreview } from '@/hooks/useStitchPreview';
 import { designsService, type Design } from '@/services/designs';
@@ -37,6 +37,7 @@ export default function SimulatorScreen() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<Speed>('1');
   const [needlePos, setNeedlePos] = useState<{ xPct: number; yPct: number } | null>(null);
+  const [selectedStitch, setSelectedStitch] = useState<SelectedStitchInfo | null>(null);
   const needleBob = useSharedValue(0);
 
   useEffect(() => {
@@ -98,6 +99,7 @@ export default function SimulatorScreen() {
     setSelectedId(id);
     setProgress(0);
     setPlaying(false);
+    setSelectedStitch(null);
   };
 
   const restart = () => {
@@ -178,6 +180,7 @@ export default function SimulatorScreen() {
                 heightMm={sim.heightMm}
                 progress={progress}
                 onNeedlePosition={setNeedlePos}
+                onSelectStitch={setSelectedStitch}
               />
             )}
             {progress > 0 && progress < 1 && needlePos && (
@@ -194,6 +197,51 @@ export default function SimulatorScreen() {
             {progress >= 1 && (
               <View style={styles.completeBadge}>
                 <Badge label="Stitch-out complete" tone="success" />
+              </View>
+            )}
+            {!selectedStitch && sim.source !== 'none' && !sim.loading && (
+              <View style={styles.inspectHint} pointerEvents="none">
+                <MousePointerClick size={12} color={colors.textTertiary} />
+                <Text style={[typography.caption, { color: colors.textTertiary }]}>
+                  Tap any stitch to inspect it
+                </Text>
+              </View>
+            )}
+            {selectedStitch && (
+              <View style={styles.inspectCard}>
+                <View style={styles.inspectCardHeader}>
+                  <Badge
+                    label={selectedStitch.kind === 'jump' ? 'Jump' : 'Stitch'}
+                    tone={selectedStitch.kind === 'jump' ? 'neutral' : 'indigo'}
+                  />
+                  <Pressable onPress={() => setSelectedStitch(null)} hitSlop={8} accessibilityLabel="Close">
+                    <X size={15} color={colors.textTertiary} />
+                  </Pressable>
+                </View>
+                <Text style={[typography.bodySmall, { color: colors.textPrimary, marginTop: spacing.xs }]}>
+                  #{formatNumber(selectedStitch.index)} of {formatNumber(selectedStitch.total)}
+                </Text>
+                <View style={styles.inspectRow}>
+                  <Text style={[typography.caption, styles.inspectLabel]}>Length</Text>
+                  <Text style={[typography.caption, { color: colors.textPrimary }]}>
+                    {selectedStitch.lengthMm.toFixed(2)}mm
+                  </Text>
+                </View>
+                <View style={styles.inspectRow}>
+                  <Text style={[typography.caption, styles.inspectLabel]}>Position</Text>
+                  <Text style={[typography.caption, { color: colors.textPrimary }]}>
+                    {selectedStitch.xMm.toFixed(1)}, {selectedStitch.yMm.toFixed(1)}mm
+                  </Text>
+                </View>
+                {selectedStitch.colorHex && (
+                  <View style={styles.inspectRow}>
+                    <Text style={[typography.caption, styles.inspectLabel]}>Thread</Text>
+                    <View style={styles.inspectThreadValue}>
+                      <View style={[styles.inspectSwatch, { backgroundColor: selectedStitch.colorHex }]} />
+                      <Text style={[typography.caption, { color: colors.textPrimary }]}>{selectedStitch.colorHex}</Text>
+                    </View>
+                  </View>
+                )}
               </View>
             )}
           </View>
@@ -354,6 +402,54 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: spacing.sm,
     right: spacing.sm,
+  },
+  inspectHint: {
+    position: 'absolute',
+    bottom: spacing.sm,
+    left: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xxs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xxs,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+  },
+  inspectCard: {
+    position: 'absolute',
+    bottom: spacing.sm,
+    left: spacing.sm,
+    width: 190,
+    padding: spacing.sm,
+    borderRadius: radius.sm,
+    backgroundColor: colors.white,
+    ...(shadows.card as object),
+  },
+  inspectCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  inspectRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.xxs,
+  },
+  inspectLabel: {
+    color: colors.textTertiary,
+  },
+  inspectThreadValue: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xxs,
+  },
+  inspectSwatch: {
+    width: 12,
+    height: 12,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   controlsRow: {
     flexDirection: 'row',

@@ -1,8 +1,24 @@
-import React, { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
-import Svg, { Defs, Line, LinearGradient, Rect, Stop } from 'react-native-svg';
-import { radius } from '@/theme';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { Pressable, StyleSheet, type LayoutChangeEvent } from 'react-native';
+import Svg, { Circle, Defs, Line, LinearGradient, Rect, Stop } from 'react-native-svg';
+import { colors as themeColors, radius } from '@/theme';
 import type { MmSegment } from '@/utils/stitchPreview';
+
+export interface SelectedStitchInfo {
+  /** 1-based ordinal among every playback unit (stitches + jumps) up to
+   * and including this one -- "stitch #412 of 1,897", matching how a real
+   * machine operator would refer to a position in the stitch-out. */
+  index: number;
+  total: number;
+  kind: 'stitch' | 'jump';
+  lengthMm: number;
+  /** Design-space mm position (already un-centered, matching widthMm/
+   * heightMm), of the unit's end point -- where the needle is after it. */
+  xMm: number;
+  yMm: number;
+  colorIndex: number;
+  colorHex: string | null;
+}
 
 interface EmbossedStitchCanvasProps {
   segments: MmSegment[];
@@ -11,6 +27,10 @@ interface EmbossedStitchCanvasProps {
   heightMm: number;
   progress: number; // 0..1
   onNeedlePosition?: (pos: { xPct: number; yPct: number } | null) => void;
+  /** Tap-to-inspect: fires with details of whichever currently-visible
+   * stitch or jump was closest to the tap, or null when the tap didn't
+   * land near anything (or the design has nothing visible yet). */
+  onSelectStitch?: (info: SelectedStitchInfo | null) => void;
 }
 
 // 1 "preview unit" = 0.1mm of real design size -- gives plenty of
@@ -89,12 +109,22 @@ interface Dash extends MmSegment {
    * page. */
   nx: number;
   ny: number;
+  kind: 'stitch' | 'jump';
+  /** Real mm-space length of this exact playback unit (a whole jump, or
+   * one subdivided stitch dash) -- precomputed once here rather than
+   * recomputed from scaled view-space coordinates at inspect time. */
+  lengthMm: number;
 }
 
 /**
- * Chops every segment into short, individually-separated stitch dashes
+ * Chops every *stitch* segment into short, individually-separated dashes
  * (see `STITCH_LEN_MM`/`STITCH_GAP_MM` above) -- the single biggest visual
- * difference between "a rendered line" and "a row of real stitches".
+ * difference between "a rendered line" and "a row of real stitches". Jump
+ * segments (the needle travelling with the thread trimmed/lifted, laying
+ * down nothing) are kept as a single whole unit instead -- subdividing a
+ * jump into fake "stitch" pieces would misrepresent exactly the kind of
+ * machine behavior a "click to inspect jumps" feature needs to report
+ * accurately.
  */
 function subdivideIntoDashes(segments: MmSegment[]): Dash[] {
   const out: Dash[] = [];
@@ -107,6 +137,12 @@ function subdivideIntoDashes(segments: MmSegment[]): Dash[] {
     const uy = dy / len;
     const nx = -uy;
     const ny = ux;
+
+    if (seg.kind === 'jump') {
+      out.push({ ...seg, kind: 'jump', nx, ny, lengthMm: len });
+      continue;
+    }
+
     const steps = Math.max(1, Math.round(len / STITCH_LEN_MM));
     const pieceLen = len / steps;
     const trim = Math.min(STITCH_GAP_MM / 2, pieceLen * 0.35);
@@ -120,12 +156,31 @@ function subdivideIntoDashes(segments: MmSegment[]): Dash[] {
         x2: seg.x1 + ux * endT,
         y2: seg.y1 + uy * endT,
         colorIndex: seg.colorIndex,
+        kind: 'stitch',
         nx,
         ny,
+        lengthMm: endT - startT,
       });
     }
   }
   return out;
+}
+
+/** Squared distance from point `p` to the closest point on segment `a`-`b`
+ * -- used by tap-to-inspect to find the nearest dash to wherever the user
+ * tapped, same standard point-to-segment-distance approach the backend's
+ * own color-blend-line detection uses (digitizer/segmentation/
+ * color_quantize.py's `_point_segment_dist2`), just in 2-D screen space
+ * here instead of 3-D color space. */
+function pointSegmentDist2(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 < 1e-9 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const cx = ax + t * dx;
+  const cy = ay + t * dy;
+  return (px - cx) ** 2 + (py - cy) ** 2;
 }
 
 /**
@@ -153,6 +208,12 @@ function subdivideIntoDashes(segments: MmSegment[]): Dash[] {
  *      way across the dash's width -- the glossy highlight real thread
  *      shows along its lit edge.
  *
+ * Jumps (needle travel with no thread laid down) render as a thin, flat,
+ * dashed gray line instead -- visually distinct from real thread on sight,
+ * matching the convention every professional digitizing tool uses, and
+ * (see `onSelectStitch`) tappable just like a real stitch so a jump run
+ * that looks suspiciously long can actually be inspected, not just seen.
+ *
  * Built with react-native-svg so the exact same component (and the exact
  * same visual result) renders on web *and* native, rather than relying on
  * an HTML <canvas>, which has no native equivalent in Expo.
@@ -164,9 +225,26 @@ export function EmbossedStitchCanvas({
   heightMm,
   progress,
   onNeedlePosition,
+  onSelectStitch,
 }: EmbossedStitchCanvasProps) {
   const viewW = Math.max(1, widthMm * PX_PER_MM);
   const viewH = Math.max(1, heightMm * PX_PER_MM);
+
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [selectedKey, setSelectedKey] = useState<number | null>(null);
+  // Used for hit-testing taps: `measure()` reliably returns this node's
+  // on-screen page offset on BOTH native (iOS/Android) and web, unlike
+  // `nativeEvent.locationX/locationY` -- react-native-web's Pressable
+  // leaves `nativeEvent` as the raw browser MouseEvent, which has no
+  // locationX/locationY at all, so relying on those silently broke every
+  // tap on web (desktop + the web preview this app actually ships to
+  // first). pageX/pageY + measure() works identically everywhere.
+  const pressableRef = useRef<React.ElementRef<typeof Pressable> | null>(null);
+
+  const onLayout = useCallback((e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    setContainerSize({ width, height });
+  }, []);
 
   // Dash every segment into individual stitches, and scale into view-space,
   // exactly ONCE per design (keyed only on `segments`/dimensions, never on
@@ -181,7 +259,16 @@ export function EmbossedStitchCanvas({
   // the full dash list once and slicing it per frame below turns that
   // per-tick cost into an (almost free) array slice instead.
   const allDashes = useMemo(
-    () => (segments.length <= MAX_SEGMENTS_FOR_DASHING ? subdivideIntoDashes(segments) : segments.map((s) => ({ ...s, nx: 0, ny: 0 }))),
+    () =>
+      segments.length <= MAX_SEGMENTS_FOR_DASHING
+        ? subdivideIntoDashes(segments)
+        : segments.map((s) => ({
+            ...s,
+            nx: 0,
+            ny: 0,
+            kind: (s.kind ?? 'stitch') as 'stitch' | 'jump',
+            lengthMm: Math.hypot(s.x2 - s.x1, s.y2 - s.y1),
+          })),
     [segments]
   );
 
@@ -251,16 +338,19 @@ export function EmbossedStitchCanvas({
   // total instead means the exact same subset of indices is kept for the
   // entire animation, so decimation only ever adds detail as playback
   // advances, never removes something the user already saw stitched in.
+  let decimateStep = 1;
   if (progress < 1 && total > DECIMATE_ABOVE) {
-    const step = Math.ceil(total / DECIMATE_ABOVE);
-    if (step > 1) {
-      drawDashes = drawDashes.filter((_, i) => i % step === 0);
+    decimateStep = Math.ceil(total / DECIMATE_ABOVE);
+    if (decimateStep > 1) {
+      drawDashes = drawDashes.filter((_, i) => i % decimateStep === 0);
     }
   }
 
   const scaledDashes = drawDashes;
+  const stitchDashes = useMemo(() => scaledDashes.filter((d) => d.kind !== 'jump'), [scaledDashes]);
+  const jumpDashes = useMemo(() => scaledDashes.filter((d) => d.kind === 'jump'), [scaledDashes]);
 
-  const fullEmboss = scaledDashes.length <= EMBOSS_LAYER_CAP;
+  const fullEmboss = stitchDashes.length <= EMBOSS_LAYER_CAP;
 
   // Thread width scales gently with design size so a tiny monogram and a
   // large back patch both look proportionate rather than either needle-thin
@@ -269,8 +359,124 @@ export function EmbossedStitchCanvas({
   const shadowOffset = strokeW * 0.42;
   const highlightOffset = strokeW * 0.24;
 
+  // Tap-to-inspect: maps a tap's on-screen pixel position back into the
+  // SVG's own viewBox coordinate space, accounting for the same
+  // "xMidYMid meet" letterboxing the <Svg> itself uses by default when the
+  // container's aspect ratio doesn't exactly match the design's -- a
+  // square logo in a wider/taller stage frame is letterboxed, and a naive
+  // tap-position mapping that ignored that would misread every tap near
+  // the letterboxed edges. Then finds whichever currently-visible dash
+  // (stitch or jump) is closest, by real on-screen distance, and reports
+  // it back via `onSelectStitch` -- this is the actual "click to inspect
+  // lines/jumps/points" feature: without it, the simulator could only be
+  // watched, never interrogated.
+  const resolveTapAtLocalPoint = useCallback(
+    (localX: number, localY: number) => {
+      if (!onSelectStitch || containerSize.width <= 0 || containerSize.height <= 0 || scaledDashes.length === 0) {
+        onSelectStitch?.(null);
+        return;
+      }
+      const scale = Math.min(containerSize.width / viewW, containerSize.height / viewH);
+      const renderedW = viewW * scale;
+      const renderedH = viewH * scale;
+      const offsetX = (containerSize.width - renderedW) / 2;
+      const offsetY = (containerSize.height - renderedH) / 2;
+      const svgX = (localX - offsetX) / scale;
+      const svgY = (localY - offsetY) / scale;
+
+      let bestIdx = -1;
+      let bestDist = Infinity;
+      for (let i = 0; i < scaledDashes.length; i++) {
+        const d = scaledDashes[i];
+        const dist = pointSegmentDist2(svgX, svgY, d.x1, d.y1, d.x2, d.y2);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      }
+      // A generous-but-bounded hit radius (12mm of view-space, i.e.
+      // forgiving enough for a fingertip on a small screen without
+      // matching a tap that landed nowhere near any thread).
+      const hitRadiusPx = PX_PER_MM * 12;
+      if (bestIdx < 0 || bestDist > hitRadiusPx * hitRadiusPx) {
+        setSelectedKey(null);
+        onSelectStitch(null);
+        return;
+      }
+
+      const picked = scaledDashes[bestIdx];
+      // Recover this dash's real ordinal position in the *un-decimated*
+      // full timeline (not just its index within the thinned-out
+      // `scaledDashes` draw list) so "stitch #N of total" means the same
+      // N a real machine readout would show, regardless of how much the
+      // live preview happens to be decimating for performance right now.
+      const realIndex = scaledAllDashes.indexOf(picked as (typeof scaledAllDashes)[number]);
+      const ordinal = realIndex >= 0 ? realIndex + 1 : bestIdx + 1;
+      setSelectedKey(ordinal);
+      onSelectStitch({
+        index: ordinal,
+        total,
+        kind: picked.kind,
+        lengthMm: picked.lengthMm,
+        xMm: picked.x2 / PX_PER_MM,
+        yMm: picked.y2 / PX_PER_MM,
+        colorIndex: picked.colorIndex,
+        colorHex: picked.kind === 'jump' ? null : palette[picked.colorIndex % Math.max(1, palette.length)] ?? null,
+      });
+    },
+    [containerSize, viewW, viewH, scaledDashes, scaledAllDashes, total, palette, onSelectStitch]
+  );
+
+  const handlePress = useCallback(
+    (evt: {
+      nativeEvent: {
+        locationX?: number;
+        locationY?: number;
+        pageX?: number;
+        pageY?: number;
+      };
+    }) => {
+      if (!onSelectStitch) return;
+      const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
+      const node = pressableRef.current as unknown as {
+        measure?: (
+          cb: (x: number, y: number, w: number, h: number, pageX: number, pageY: number) => void
+        ) => void;
+      } | null;
+      // `locationX`/`locationY` are populated reliably on native iOS/Android,
+      // but react-native-web's Pressable leaves `nativeEvent` as the raw
+      // browser MouseEvent, which never has them -- so on web we instead
+      // combine the event's page coordinates with this node's own
+      // on-screen page offset (via `measure`, which works identically on
+      // both native and web) to derive the same local, container-relative
+      // point.
+      if (typeof locationX === 'number' && typeof locationY === 'number') {
+        resolveTapAtLocalPoint(locationX, locationY);
+        return;
+      }
+      if (typeof pageX === 'number' && typeof pageY === 'number' && node?.measure) {
+        node.measure((_x, _y, _w, _h, containerPageX, containerPageY) => {
+          resolveTapAtLocalPoint(pageX - containerPageX, pageY - containerPageY);
+        });
+        return;
+      }
+      onSelectStitch(null);
+    },
+    [onSelectStitch, resolveTapAtLocalPoint]
+  );
+
+  const selectedDash = useMemo(() => {
+    if (selectedKey === null) return null;
+    return scaledAllDashes[selectedKey - 1] ?? null;
+  }, [selectedKey, scaledAllDashes]);
+
   return (
-    <View style={styles.wrap}>
+    <Pressable
+      ref={pressableRef}
+      style={styles.wrap}
+      onLayout={onLayout}
+      onPress={onSelectStitch ? handlePress : undefined}
+    >
       <Svg width="100%" height="100%" viewBox={`0 0 ${viewW} ${viewH}`}>
         <Defs>
           {palette.map((hex, i) => (
@@ -327,11 +533,26 @@ export function EmbossedStitchCanvas({
           />
         ))}
 
+        {/* jump pass -- thin dashed gray lines, visually distinct from real
+            thread, matching the convention every digitizing tool uses */}
+        {jumpDashes.map((s, i) => (
+          <Line
+            key={`jump-${i}`}
+            x1={s.x1}
+            y1={s.y1}
+            x2={s.x2}
+            y2={s.y2}
+            stroke="rgba(90,95,110,0.55)"
+            strokeWidth={Math.max(0.8, strokeW * 0.3)}
+            strokeDasharray={`${PX_PER_MM * 0.6} ${PX_PER_MM * 0.4}`}
+          />
+        ))}
+
         {/* shadow pass -- gives each dash its raised/embossed look, offset
             across its OWN width rather than a fixed page diagonal */}
         {!fullEmboss
           ? null
-          : scaledDashes.map((s, i) => (
+          : stitchDashes.map((s, i) => (
               <Line
                 key={`shadow-${i}`}
                 x1={s.x1 + s.nx * shadowOffset}
@@ -345,7 +566,7 @@ export function EmbossedStitchCanvas({
             ))}
 
         {/* main thread-colored pass -- one dash per stitch */}
-        {scaledDashes.map((s, i) => (
+        {stitchDashes.map((s, i) => (
           <Line
             key={`body-${i}`}
             x1={s.x1}
@@ -361,7 +582,7 @@ export function EmbossedStitchCanvas({
         {/* sheen pass -- thin bright highlight along each dash's own lit edge */}
         {!fullEmboss
           ? null
-          : scaledDashes.map((s, i) => (
+          : stitchDashes.map((s, i) => (
               <Line
                 key={`sheen-${i}`}
                 x1={s.x1 - s.nx * highlightOffset}
@@ -373,8 +594,16 @@ export function EmbossedStitchCanvas({
                 strokeLinecap="round"
               />
             ))}
+
+        {/* selection marker -- the tapped stitch/jump's end point */}
+        {selectedDash && (
+          <>
+            <Circle cx={selectedDash.x2} cy={selectedDash.y2} r={PX_PER_MM * 1.4} fill="none" stroke={themeColors.indigo} strokeWidth={1.6} />
+            <Circle cx={selectedDash.x2} cy={selectedDash.y2} r={PX_PER_MM * 0.35} fill={themeColors.indigo} />
+          </>
+        )}
       </Svg>
-    </View>
+    </Pressable>
   );
 }
 

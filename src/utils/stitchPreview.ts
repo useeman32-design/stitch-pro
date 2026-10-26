@@ -25,6 +25,18 @@ export interface MmSegment {
   x2: number;
   y2: number;
   colorIndex: number;
+  /** 'stitch' (default, real thread -- what every existing caller means)
+   * or 'jump' (the needle moves with the thread trimmed/lifted, no thread
+   * laid down between the two points). Jumps were previously discarded
+   * entirely by `pointsToMmSegments` -- real machine behavior, not a
+   * renderable stitch -- but that also meant there was no way to show or
+   * inspect them at all, which is exactly the "click to inspect lines/
+   * jumps/points" ask: you can't click on data that was thrown away
+   * before it ever reached the renderer. Kept optional (defaulting to
+   * 'stitch' wherever omitted) so the older client-analysis path
+   * (`gridSegmentsToMm`, which has no concept of jumps at all) needs no
+   * changes. */
+  kind?: 'stitch' | 'jump';
 }
 
 export interface StitchPreviewData {
@@ -81,7 +93,13 @@ export function pointsToMmSegments(
   for (const p of points) {
     const { x: xMm, y: yMm } = toMm(p.x, p.y);
     if (p.command === 'stitch' && haveCurrent) {
-      segments.push({ x1: cx, y1: cy, x2: xMm, y2: yMm, colorIndex });
+      segments.push({ x1: cx, y1: cy, x2: xMm, y2: yMm, colorIndex, kind: 'stitch' });
+    } else if (p.command === 'jump' && haveCurrent) {
+      // Previously discarded entirely -- real machine behavior (needle
+      // lifted/thread trimmed, nothing stitched), but also real, visible
+      // needle travel that a "click to inspect" view should be able to
+      // show and report on, not silently hide as if it never happened.
+      segments.push({ x1: cx, y1: cy, x2: xMm, y2: yMm, colorIndex, kind: 'jump' });
     }
     if (p.command === 'colorChange') {
       colorIndex += 1;
