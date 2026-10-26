@@ -42,7 +42,6 @@ export default function DesignPreviewScreen() {
 
   if (!artwork || !stitchPlan) return null;
 
-  const placementLabel = settings.placement === 'Custom' ? settings.customPlacement || 'Custom' : settings.placement;
   const fabricLabel = settings.fabric === 'Custom' ? settings.customFabric || 'Custom' : settings.fabric;
 
   return (
@@ -96,7 +95,6 @@ export default function DesignPreviewScreen() {
           <Card style={{ marginTop: spacing.md }}>
             <Text style={[typography.h3, { marginBottom: spacing.md }]}>Design Settings</Text>
             <View style={styles.badgeGrid}>
-              <Badge label={placementLabel} tone="neutral" />
               <Badge label={fabricLabel} tone="neutral" />
               <Badge label={`${settings.density} Density`} tone="neutral" />
               <Badge label={`${settings.widthMm}×${settings.heightMm}mm`} tone="neutral" />

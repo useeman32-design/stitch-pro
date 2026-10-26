@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Shirt, Ruler, Layers, Palette, Plus, Repeat, Trash2, Grid3x3 } from 'lucide-react-native';
+import { Ruler, Layers, Palette, Plus, Repeat, Trash2, Grid3x3 } from 'lucide-react-native';
 import { colors, radius, spacing, typography } from '@/theme';
 import { ScreenContainer } from '@/components/layout/ScreenContainer';
 import { Card } from '@/components/ui/Card';
@@ -25,7 +25,6 @@ import {
   type BorderMode,
   type DesignSize,
   type FabricType,
-  type Placement,
   type SizeUnit,
   type StitchStyle,
 } from '@/services/digitizing';
@@ -48,8 +47,14 @@ const borderModes: { label: string; value: BorderMode }[] = [
 const MIN_BORDER_WIDTH_MM = 0.4;
 const MAX_BORDER_WIDTH_MM = 3;
 
-const placements: Placement[] = ['Left Chest', 'Center Front', 'Full Back', 'Sleeve', 'Cap Front', 'Custom'];
-const fabrics: FabricType[] = ['Cotton Twill', 'Denim', 'Fleece', 'Leather', 'Knit / Jersey', 'Custom'];
+const fabrics: FabricType[] = [
+  'Cotton / Polo',
+  'Ankara / Woven Cotton',
+  'Cap / Twill',
+  'Fleece / Hoodie',
+  'Jersey / Knit',
+  'Custom',
+];
 const unitOptions: { label: string; value: SizeUnit }[] = [
   { label: 'mm', value: 'mm' },
   { label: 'cm', value: 'cm' },
@@ -263,23 +268,6 @@ export default function DesignSettingsScreen() {
       />
 
       <View style={styles.stack}>
-        <Card>
-          <SectionLabel icon={Shirt} label="Placement" />
-          <View style={styles.chipRow}>
-            {placements.map((p) => (
-              <Chip key={p} label={p} active={settings.placement === p} onPress={() => updateSettings({ placement: p })} />
-            ))}
-          </View>
-          {settings.placement === 'Custom' && (
-            <Input
-              placeholder="Describe the placement (e.g. Inside Collar)"
-              value={settings.customPlacement}
-              onChangeText={(t) => updateSettings({ customPlacement: t })}
-              style={{ marginTop: spacing.sm }}
-            />
-          )}
-        </Card>
-
         <Card>
           <SectionLabel icon={Ruler} label="Design Size" />
           <View style={styles.chipRow}>

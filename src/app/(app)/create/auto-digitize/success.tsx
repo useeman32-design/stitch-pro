@@ -134,7 +134,6 @@ export default function DigitizeSuccessScreen() {
               {artwork.name}
             </Text>
             <Text style={[typography.bodySmall, { color: colors.textSecondary }]}>
-              {settings.placement === 'Custom' ? settings.customPlacement || 'Custom' : settings.placement} ·{' '}
               {settings.fabric === 'Custom' ? settings.customFabric || 'Custom' : settings.fabric}
             </Text>
           </View>

@@ -31,8 +31,14 @@ export interface StitchPlanSummary {
   sizeMm: { width: number; height: number };
 }
 
-export type Placement = 'Left Chest' | 'Center Front' | 'Full Back' | 'Sleeve' | 'Cap Front' | 'Custom';
-export type FabricType = 'Cotton Twill' | 'Denim' | 'Fleece' | 'Leather' | 'Knit / Jersey' | 'Custom';
+/** Chosen to match the garments StitchPro's actual Nigerian embroidery-
+ * business users most commonly work with (polos/uniform shirts, Ankara/
+ * woven cotton fabric, caps, hoodies, jerseys) rather than a generic
+ * industrial-textile list (the previous set included Denim and Leather,
+ * neither a common embroidery substrate for this market) -- renamed from
+ * the original six options per direct user feedback on which fabric
+ * categories actually show up in real local orders. */
+export type FabricType = 'Cotton / Polo' | 'Ankara / Woven Cotton' | 'Cap / Twill' | 'Fleece / Hoodie' | 'Jersey / Knit' | 'Custom';
 export type StitchDensity = 'Light' | 'Standard' | 'Dense';
 export type DesignSize = 'Small' | 'Medium' | 'Large' | 'Custom';
 export type SizeUnit = 'mm' | 'cm' | 'in';
@@ -54,9 +60,15 @@ export type StitchStyle = 'fill' | 'cross';
  */
 export type BorderMode = 'auto' | 'off' | 'custom';
 
+// `placement` (Left Chest / Center Front / etc.) was removed from
+// DigitizeSettings entirely per direct user feedback asking to simplify
+// the Design Settings screen -- it didn't feed into any real digitizing
+// decision (stitch generation never branched on it), it only existed as
+// descriptive metadata shown back in the Preview/Download summary, so
+// dropping it is a pure UI simplification with no loss of actual
+// digitizing behavior.
+
 export interface DigitizeSettings {
-  placement: Placement;
-  customPlacement: string;
   fabric: FabricType;
   customFabric: string;
   /** 0-100 continuous slider value driving the density bucket below. */
@@ -79,9 +91,7 @@ export interface DigitizeSettings {
 }
 
 export const defaultDigitizeSettings: DigitizeSettings = {
-  placement: 'Left Chest',
-  customPlacement: '',
-  fabric: 'Cotton Twill',
+  fabric: 'Cotton / Polo',
   customFabric: '',
   densityPercent: 50,
   density: 'Standard',
