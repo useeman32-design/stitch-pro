@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Shirt, Ruler, Layers, Palette, Plus, Repeat, Trash2, Grid3x3 } from 'lucide-react-native';
@@ -216,6 +216,33 @@ export default function DesignSettingsScreen() {
     router.push('/create/auto-digitize/preview');
   };
 
+  // Which of the two actually-selectable Stitch Type chips the analysis
+  // recommends, plus anything else it recommends that isn't a selectable
+  // chip at all (Satin is auto-applied per-region by the pipeline itself,
+  // not a top-level style toggle; Running/Appliqué aren't implemented
+  // stitch types yet -- see the stitch-type research). Previously this was
+  // its own separate "Recommended Stitch Types" card at the bottom of the
+  // whole screen, disconnected from the actual Stitch Type picker above --
+  // moved inline here so the recommendation shows up exactly where the
+  // decision is actually made, instead of needing to scroll down and
+  // mentally map a badge list back up to the real choice.
+  const recommendedStitchStyleSet = useMemo(() => {
+    const recommended = (analysis?.recommendedStitchTypes ?? []).map((t) => t.toLowerCase());
+    const set = new Set<StitchStyle>();
+    for (const s of stitchStyles) {
+      const matchesLabel = s.label.toLowerCase().replace(/[^a-z]/g, '');
+      if (recommended.some((r) => r.replace(/[^a-z]/g, '') === matchesLabel || r === s.value)) {
+        set.add(s.value);
+      }
+    }
+    return set;
+  }, [analysis]);
+
+  const otherRecommendedTechniques = useMemo(() => {
+    const selectableLabels = new Set(stitchStyles.map((s) => s.label.toLowerCase()));
+    return (analysis?.recommendedStitchTypes ?? []).filter((t) => !selectableLabels.has(t.toLowerCase()));
+  }, [analysis]);
+
   const openAddColor = () => setColorModal({ mode: 'add' });
   const openReplaceColor = (index: number) => setColorModal({ mode: 'replace', index });
 
@@ -334,9 +361,17 @@ export default function DesignSettingsScreen() {
                 label={s.label}
                 active={settings.stitchStyle === s.value}
                 onPress={() => updateSettings({ stitchStyle: s.value })}
+                recommended={recommendedStitchStyleSet.has(s.value)}
               />
             ))}
           </View>
+          {otherRecommendedTechniques.length > 0 && (
+            <Text style={[typography.caption, styles.recommendedNote]}>
+              Based on this artwork, StitchPro also automatically applies{' '}
+              {otherRecommendedTechniques.join(' and ')} where it helps (e.g. clean satin edges on thin
+              detail) — no separate selection needed.
+            </Text>
+          )}
 
           <View style={styles.densityHeaderRow}>
             <Text style={[typography.bodySmall, styles.subLabel]}>Stitch Angle</Text>
@@ -429,17 +464,6 @@ export default function DesignSettingsScreen() {
             </Text>
           </Pressable>
         </Card>
-
-        {analysis?.recommendedStitchTypes?.length ? (
-          <Card>
-            <SectionLabel icon={Layers} label="Recommended Stitch Types" />
-            <View style={styles.chipRow}>
-              {analysis.recommendedStitchTypes.map((t) => (
-                <Badge key={t} label={t} tone="indigo" />
-              ))}
-            </View>
-          </Card>
-        ) : null}
       </View>
 
       <WizardFooter
@@ -469,7 +493,17 @@ function SectionLabel({ icon: Icon, label }: { icon: any; label: string }) {
   );
 }
 
-function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+function Chip({
+  label,
+  active,
+  onPress,
+  recommended,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  recommended?: boolean;
+}) {
   return (
     <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
       <Text
@@ -481,6 +515,13 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
       >
         {label}
       </Text>
+      {recommended && (
+        <View style={[styles.recommendedBadge, active && styles.recommendedBadgeActive]}>
+          <Text style={[typography.tiny, styles.recommendedBadgeText, active && styles.recommendedBadgeTextActive]}>
+            Recommended
+          </Text>
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -501,6 +542,9 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
     paddingHorizontal: spacing.sm + 2,
     paddingVertical: spacing.xs + 2,
     borderRadius: radius.pill,
@@ -508,6 +552,27 @@ const styles = StyleSheet.create({
   },
   chipActive: {
     backgroundColor: colors.indigo,
+  },
+  recommendedBadge: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.indigo + '22',
+  },
+  recommendedBadgeActive: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+  recommendedBadgeText: {
+    color: colors.indigo,
+    fontFamily: typography.bodyMedium.fontFamily,
+  },
+  recommendedBadgeTextActive: {
+    color: colors.white,
+  },
+  recommendedNote: {
+    color: colors.textTertiary,
+    marginTop: spacing.sm,
+    fontStyle: 'italic',
   },
   sizeInputRow: {
     flexDirection: 'row',
