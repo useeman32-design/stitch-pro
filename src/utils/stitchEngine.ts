@@ -160,33 +160,64 @@ export async function analyzeImage(source: any, maxColors = 5): Promise<PaletteR
     if (merged.length >= maxColors * 2) break;
   }
 
-  // background: inspect the four corner pixels — a real digitizer ignores
-  // the garment/fabric behind the artwork, so anything that matches this
-  // corner color AND covers a big share of the frame is treated as
-  // "background" and excluded from the reported thread palette below.
-  const corners = [
+  // background: inspect small blocks around each of the four corners — a
+  // real digitizer ignores the garment/fabric behind the artwork, so
+  // anything that matches this corner color AND covers a big share of the
+  // frame is treated as "background" and excluded from the reported thread
+  // palette below.
+  //
+  // This used to sample a single literal pixel per corner (data[(cy*w+cx)*4]
+  // at exactly (0,0)/(w-1,0)/etc). A lone pixel is extremely noise-prone:
+  // one anti-aliased/dithered edge pixel, a JPEG compression artifact, or a
+  // transparent-canvas PNG with a few px of padding could swing that single
+  // sample's alpha near zero and report "Transparent" for a design whose
+  // background plainly isn't. Averaging a small block per corner (and
+  // requiring a MAJORITY of the 4 corners to individually look transparent,
+  // not just the 4-sample average) makes this robust to that kind of
+  // single-pixel noise.
+  const blockSize = Math.max(1, Math.min(6, Math.floor(Math.min(w, h) / 8)));
+  const cornerOrigins: [number, number][] = [
     [0, 0],
-    [w - 1, 0],
-    [0, h - 1],
-    [w - 1, h - 1],
+    [w - blockSize, 0],
+    [0, h - blockSize],
+    [w - blockSize, h - blockSize],
   ];
-  let cornerAlphaSum = 0;
   let cornerR = 0;
   let cornerG = 0;
   let cornerB = 0;
-  for (const [cx, cy] of corners) {
-    const idx = (cy * w + cx) * 4;
-    cornerAlphaSum += data[idx + 3];
-    cornerR += data[idx];
-    cornerG += data[idx + 1];
-    cornerB += data[idx + 2];
+  let transparentCorners = 0;
+  for (const [ox, oy] of cornerOrigins) {
+    let a = 0;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let n = 0;
+    for (let by = 0; by < blockSize; by++) {
+      for (let bx = 0; bx < blockSize; bx++) {
+        const x = Math.max(0, Math.min(w - 1, ox + bx));
+        const y = Math.max(0, Math.min(h - 1, oy + by));
+        const idx = (y * w + x) * 4;
+        r += data[idx];
+        g += data[idx + 1];
+        b += data[idx + 2];
+        a += data[idx + 3];
+        n++;
+      }
+    }
+    const blockAlpha = n > 0 ? a / n : 255;
+    if (blockAlpha < 60) transparentCorners++;
+    cornerR += n > 0 ? r / n : 0;
+    cornerG += n > 0 ? g / n : 0;
+    cornerB += n > 0 ? b / n : 0;
   }
-  const avgAlpha = cornerAlphaSum / corners.length;
-  const avgR = cornerR / corners.length;
-  const avgG = cornerG / corners.length;
-  const avgB = cornerB / corners.length;
+  const avgR = cornerR / cornerOrigins.length;
+  const avgG = cornerG / cornerOrigins.length;
+  const avgB = cornerB / cornerOrigins.length;
   let background: PaletteResult['background'] = 'Custom';
-  if (avgAlpha < 60) background = 'Transparent';
+  // Require at least 3 of the 4 corners to individually read as
+  // transparent, not just an average dip -- a single noisy corner can no
+  // longer flip the whole result.
+  if (transparentCorners >= 3) background = 'Transparent';
   else if (avgR > 235 && avgG > 235 && avgB > 235) background = 'White';
 
   const saturationOf = (r: number, g: number, b: number) => {
