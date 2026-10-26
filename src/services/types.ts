@@ -4,6 +4,8 @@
  * swap the mock implementations for real API clients later.
  */
 
+import type { DstPoint } from '@/utils/dstWriter';
+
 export type StitchFormat = 'DST' | 'PES' | 'JEF' | 'EXP' | 'VP3' | 'HUS';
 
 export type ProjectType = 'logo' | 'text' | 'monogram' | 'custom';
@@ -22,6 +24,17 @@ export interface Design {
   stitches: number;
   colors: number;
   sizeMm: { width: number; height: number };
+  /**
+   * The real, physical stitch sequence + thread palette behind this design
+   * -- the exact same data the Auto-Digitize wizard's "Finish & Download"
+   * step exports from. Only present for designs actually produced by the
+   * digitizing pipeline (not the 5 hardcoded sample/seed designs, which
+   * were never real digitizer output and have no underlying stitch data to
+   * re-export). Download/QC Check in My Designs operate on this -- without
+   * it there is nothing real to download or inspect, and those actions
+   * should say so rather than fake a result.
+   */
+  stitchData?: { points: DstPoint[]; threadColors: string[] };
 }
 
 export interface User {

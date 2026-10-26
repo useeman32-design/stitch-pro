@@ -14,6 +14,8 @@ import { BottomSheet } from '@/components/ui/BottomSheet';
 import { useToast } from '@/components/ui/Toast';
 import { designsService, type Design } from '@/services/designs';
 import { formatNumber } from '@/utils/format';
+import { downloadStitchFile } from '@/utils/downloadStitchFile';
+import { runQualityCheck } from '@/utils/qcCheck';
 
 type CategoryFilter = 'all' | Design['category'];
 
@@ -34,6 +36,7 @@ export default function DesignsScreen() {
   const [category, setCategory] = useState<CategoryFilter>('all');
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [active, setActive] = useState<Design | null>(null);
+  const [busy, setBusy] = useState<'download' | 'qc' | null>(null);
 
   useEffect(() => {
     designsService.list().then(setDesigns);
@@ -177,18 +180,62 @@ export default function DesignsScreen() {
                 <Text style={styles.sheetActionLabel}>Simulate</Text>
               </Pressable>
               <Pressable
-                style={styles.sheetAction}
-                onPress={() => show(`Downloading "${active.name}" as ${active.format}…`, 'info')}
+                style={[styles.sheetAction, busy === 'download' && styles.sheetActionBusy]}
+                disabled={busy !== null}
+                onPress={async () => {
+                  if (!active.stitchData || active.stitchData.points.length === 0) {
+                    show(
+                      `"${active.name}" has no real stitch data saved (it's a sample design) — nothing to download.`,
+                      'info'
+                    );
+                    return;
+                  }
+                  setBusy('download');
+                  try {
+                    const result = await downloadStitchFile(
+                      active.stitchData.points,
+                      active.stitchData.threadColors,
+                      active.format,
+                      active.name.replace(/\.[^/.]+$/, '') || 'design'
+                    );
+                    if (result.ok) {
+                      show(`${result.filename} downloaded — a real, machine-readable file.`, 'success');
+                    } else if (result.reason === 'backend-unreachable') {
+                      show(`Couldn't reach the StitchPro backend to generate ${active.format} right now.`, 'error');
+                    } else {
+                      show('Something went wrong generating the stitch file.', 'error');
+                    }
+                  } finally {
+                    setBusy(null);
+                  }
+                }}
               >
                 <Download size={16} color={colors.indigo} />
-                <Text style={styles.sheetActionLabel}>Download</Text>
+                <Text style={styles.sheetActionLabel}>{busy === 'download' ? 'Working…' : 'Download'}</Text>
               </Pressable>
               <Pressable
-                style={styles.sheetAction}
-                onPress={() => show('Quality check passed — 96% stitch confidence.', 'success')}
+                style={[styles.sheetAction, busy === 'qc' && styles.sheetActionBusy]}
+                disabled={busy !== null}
+                onPress={() => {
+                  if (!active.stitchData || active.stitchData.points.length === 0) {
+                    show(`"${active.name}" has no real stitch data saved (it's a sample design) — nothing to check.`, 'info');
+                    return;
+                  }
+                  setBusy('qc');
+                  const result = runQualityCheck(active.stitchData.points, active.stitchData.threadColors);
+                  setBusy(null);
+                  if (result.issues.length === 0) {
+                    show(`Quality check passed — ${result.score}% confidence, no issues found.`, 'success');
+                  } else {
+                    show(
+                      `${result.passed ? 'Passed with notes' : 'Needs attention'} — ${result.score}% confidence. ${result.issues[0]}`,
+                      result.passed ? 'info' : 'error'
+                    );
+                  }
+                }}
               >
                 <ShieldCheck size={16} color={colors.indigo} />
-                <Text style={styles.sheetActionLabel}>QC Check</Text>
+                <Text style={styles.sheetActionLabel}>{busy === 'qc' ? 'Checking…' : 'QC Check'}</Text>
               </Pressable>
               <Pressable
                 style={styles.sheetAction}
@@ -286,6 +333,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+  },
+  sheetActionBusy: {
+    opacity: 0.5,
   },
   sheetActionLabel: {
     fontSize: 13,

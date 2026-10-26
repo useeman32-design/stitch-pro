@@ -13,22 +13,12 @@ import { useDigitizeWizard } from '@/contexts/DigitizeWizardContext';
 import { designsService, type Design } from '@/services/designs';
 import type { StitchFormat } from '@/services/types';
 import { useResponsive } from '@/hooks/useResponsive';
-import { buildDstFile } from '@/utils/dstWriter';
-import { exportViaBackend, type BackendFormat } from '@/services/digitizing/backendClient';
+import { downloadStitchFile } from '@/utils/downloadStitchFile';
 import { createPersistableThumbnail } from '@/utils/thumbnail';
 import { pointsToMmSegments } from '@/utils/stitchPreview';
 
 const FORMATS: StitchFormat[] = ['DST', 'PES', 'JEF', 'EXP', 'VP3', 'HUS'];
 
-// Formats the real backend (pyembroidery) can encode. HUS has no
-// pyembroidery writer yet, so it stays unavailable either way.
-const BACKEND_FORMATS: Partial<Record<StitchFormat, BackendFormat>> = {
-  DST: 'dst',
-  PES: 'pes',
-  JEF: 'jef',
-  EXP: 'exp',
-  VP3: 'vp3',
-};
 
 export default function DigitizeSuccessScreen() {
   const router = useRouter();
@@ -61,6 +51,10 @@ export default function DigitizeSuccessScreen() {
           stitches: stitchPlan.stitches,
           colors: stitchPlan.colors,
           sizeMm: stitchPlan.sizeMm,
+          // Persist the real stitch data too, not just the summary numbers
+          // -- without this, My Designs' Download/QC Check have nothing
+          // real to work with for a design opened later in a new session.
+          stitchData: dstPoints && dstPoints.length > 0 ? { points: dstPoints, threadColors } : undefined,
         })
         .then(() => setSaved(true));
     });
@@ -77,61 +71,27 @@ export default function DigitizeSuccessScreen() {
 
   if (!artwork || !stitchPlan) return null;
 
-  const triggerBlobDownload = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
   const handleDownload = async (format: StitchFormat) => {
     if (!dstPoints || dstPoints.length === 0) {
       show("Couldn't generate a real stitch file for this design — try again from Settings.", 'error');
       return;
     }
     const baseName = artwork.name.replace(/\.[^/.]+$/, '') || 'design';
-    const backendFormat = BACKEND_FORMATS[format];
-
-    // Formats beyond DST need the real backend (pyembroidery) to encode —
-    // pure client-side JS only implements the DST binary format. Try the
-    // backend first for every supported format (it's also a more
-    // authoritative encoder for DST itself); fall back to the client-side
-    // writer for DST only if the backend is unreachable/unconfigured.
-    if (backendFormat) {
-      setDownloadingFormat(format);
-      try {
-        const blob = await exportViaBackend(dstPoints, threadColors, backendFormat, baseName);
-        if (blob) {
-          triggerBlobDownload(blob, `${baseName}.${backendFormat}`);
-          show(`${baseName}.${backendFormat} downloaded — a real, machine-readable file from the StitchPro engine.`, 'success');
-          return;
-        }
-      } finally {
-        setDownloadingFormat(null);
-      }
-    }
-
-    if (format !== 'DST') {
-      show(
-        `Couldn't reach the StitchPro backend to generate a real ${format} file right now — DST (works on virtually every machine) is still available below.`,
-        'info'
-      );
-      return;
-    }
-
-    // DST-only client-side fallback, so exports keep working with zero
-    // backend configured/reachable.
+    setDownloadingFormat(format);
     try {
-      const bytes = buildDstFile(dstPoints, { name: artwork.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 16) || 'STITCHPRO' });
-      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
-      triggerBlobDownload(blob, `${baseName}.dst`);
-      show(`${baseName}.dst downloaded — a real, machine-readable Tajima DST file.`, 'success');
-    } catch {
-      show('Something went wrong generating the DST file.', 'error');
+      const result = await downloadStitchFile(dstPoints, threadColors, format, baseName);
+      if (result.ok) {
+        show(`${result.filename} downloaded — a real, machine-readable file from the StitchPro engine.`, 'success');
+      } else if (result.reason === 'backend-unreachable') {
+        show(
+          `Couldn't reach the StitchPro backend to generate a real ${format} file right now — DST (works on virtually every machine) is still available below.`,
+          'info'
+        );
+      } else {
+        show('Something went wrong generating the stitch file.', 'error');
+      }
+    } finally {
+      setDownloadingFormat(null);
     }
   };
 

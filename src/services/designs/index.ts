@@ -192,6 +192,7 @@ export const designsService = {
     sizeMm: { width: number; height: number };
     category?: Design['category'];
     format?: Design['format'];
+    stitchData?: Design['stitchData'];
   }): Promise<Design> {
     const design: Design = {
       id: `des_new_${Date.now()}_${nextDesignSeq++}`,
@@ -205,6 +206,7 @@ export const designsService = {
       stitches: input.stitches,
       colors: input.colors,
       sizeMm: input.sizeMm,
+      stitchData: input.stitchData,
     };
     const state = await loadState();
     await saveState(addCreatedDesign(state, design));
