@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { analyzeImageViaBackend } from '@/services/digitizing/backendClient';
 import { analyzeImage, buildStitchSegments, resolveImageUri } from '@/utils/stitchEngine';
 import { gridSegmentsToMm, pointsToMmSegments, type MmSegment } from '@/utils/stitchPreview';
+import type { DstPoint } from '@/utils/dstWriter';
 
 export type StitchPreviewSource = 'backend' | 'client' | 'none';
 
@@ -16,6 +17,15 @@ export interface StitchPreviewResult {
    * "couldn't reach the digitizing backend" hint instead of a silent blank
    * canvas, without ever blocking the preview on backend availability. */
   source: StitchPreviewSource;
+  /** The raw `DstPoint[]` stream behind `segments`, only ever populated on
+   * `source === 'backend'` (the client-canvas fallback has no equivalent
+   * physical-unit point stream to offer). Exists so a caller that needs
+   * the exact same real stitch plan for more than just rendering -- stats,
+   * `.dst`/`.pes`/etc export -- can reuse this one backend call instead of
+   * re-fetching/re-digitizing the same image again for that (see
+   * create/auto-digitize/preview.tsx's live density slider, the first
+   * caller that needed this). */
+  dstPoints: DstPoint[] | null;
 }
 
 const EMPTY: Omit<StitchPreviewResult, 'loading' | 'source'> = {
@@ -23,6 +33,7 @@ const EMPTY: Omit<StitchPreviewResult, 'loading' | 'source'> = {
   palette: [],
   widthMm: 0,
   heightMm: 0,
+  dstPoints: null,
 };
 
 /**
@@ -35,6 +46,13 @@ const EMPTY: Omit<StitchPreviewResult, 'loading' | 'source'> = {
  * `source: 'none'` with empty segments rather than hanging or crashing --
  * callers should show a friendly explanation in that case (see
  * simulator.tsx), not treat it as a bug.
+ *
+ * `densityMm`/`stitchLengthMm`/`borderWidthMm` are optional passthroughs to
+ * the backend's own style-appropriate defaults when omitted (see
+ * `AnalyzeImageOptions` in backendClient.ts) -- pass them when a caller
+ * wants a specific density rather than the backend's default (e.g. a live
+ * density slider re-triggering this hook's effect every time its debounced
+ * value settles).
  */
 export function useStitchPreview(
   source: any,
@@ -43,7 +61,10 @@ export function useStitchPreview(
   maxColors = 6,
   stitchStyle?: 'fill' | 'cross',
   angleDeg?: number,
-  removeBackground?: boolean
+  removeBackground?: boolean,
+  densityMm?: number,
+  stitchLengthMm?: number,
+  borderWidthMm?: number
 ): StitchPreviewResult {
   const uri = resolveImageUri(source);
   const [state, setState] = useState<StitchPreviewResult>({ ...EMPTY, loading: !!uri, source: 'none' });
@@ -60,6 +81,9 @@ export function useStitchPreview(
         stitchStyle,
         angleDeg,
         removeBackground,
+        densityMm,
+        stitchLengthMm,
+        borderWidthMm,
       });
 
       if (cancelled) return;
@@ -71,6 +95,7 @@ export function useStitchPreview(
           heightMm: backendResult.heightMm,
           loading: false,
           source: 'backend',
+          dstPoints: backendResult.points,
         });
         return;
       }
@@ -94,6 +119,7 @@ export function useStitchPreview(
           heightMm,
           loading: false,
           source: 'client',
+          dstPoints: null,
         });
       } catch {
         if (!cancelled) setState({ ...EMPTY, loading: false, source: 'none' });
@@ -104,10 +130,11 @@ export function useStitchPreview(
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uri, widthMm, heightMm, maxColors, stitchStyle, angleDeg, removeBackground]);
+  }, [uri, widthMm, heightMm, maxColors, stitchStyle, angleDeg, removeBackground, densityMm, stitchLengthMm, borderWidthMm]);
 
   if (!uri) {
     return { ...EMPTY, loading: false, source: 'none' };
   }
   return state;
 }
+
