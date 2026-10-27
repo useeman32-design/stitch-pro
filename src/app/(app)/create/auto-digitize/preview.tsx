@@ -36,6 +36,14 @@ const STITCH_TYPE_LABELS: Record<StitchTypeBreakdownEntry['type'], string> = {
   RUNNING: 'Running',
 };
 
+// Friendly label for the preview-only thread-thickness slider's current
+// value, next to its own "Fine / Standard / Heavy" scale row.
+function THREAD_THICKNESS_LABEL(scale: number): string {
+  if (scale < 0.85) return 'Fine';
+  if (scale > 1.2) return 'Heavy';
+  return 'Standard';
+}
+
 // How long to wait after the user stops moving the density slider before
 // actually re-digitizing at the new value. A real digitize call re-runs
 // the backend's full FILL/CROSS_STITCH row-spacing regeneration (see
@@ -76,6 +84,13 @@ export default function DesignPreviewScreen() {
   // call below, so the label/badge never waits on a network round trip.
   const [liveDensityPercent, setLiveDensityPercent] = useState(settings.densityPercent);
   const [debouncedDensityPercent, setDebouncedDensityPercent] = useState(settings.densityPercent);
+
+  // Thread thickness is a *preview-only* visualization aid, not something
+  // written back into the exported stitch file: a digitizer doesn't choose
+  // thread gauge, the embroiderer's physical spool does. Letting it move
+  // instantly (no debounce, no re-digitize) is correct here -- it only
+  // ever changes how the existing stitch geometry is drawn.
+  const [threadThicknessScale, setThreadThicknessScale] = useState(1);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedDensityPercent(liveDensityPercent), DENSITY_DEBOUNCE_MS);
@@ -182,6 +197,7 @@ export default function DesignPreviewScreen() {
                   widthMm={sim.widthMm}
                   heightMm={sim.heightMm}
                   progress={1}
+                  threadThicknessScale={threadThicknessScale}
                 />
                 {showUpdatingHint && (
                   <View style={styles.updatingPill}>
@@ -198,6 +214,9 @@ export default function DesignPreviewScreen() {
               Quality Check passed — 96% stitch confidence
             </Text>
           </View>
+          <Text style={[typography.caption, { color: colors.textTertiary, marginTop: spacing.xs }]}>
+            Scroll or pinch on the design to zoom, drag to pan, double-tap/double-click to reset.
+          </Text>
         </View>
 
         <View style={[styles.statsCol, isDesktop && styles.statsColDesktop]}>
@@ -222,6 +241,31 @@ export default function DesignPreviewScreen() {
               <Text style={[typography.caption, { color: colors.textTertiary }]}>Light</Text>
               <Text style={[typography.caption, { color: colors.textTertiary }]}>Standard</Text>
               <Text style={[typography.caption, { color: colors.textTertiary }]}>Dense</Text>
+            </View>
+          </Card>
+
+          <Card style={{ marginTop: spacing.md }}>
+            <View style={styles.densityHeaderRow}>
+              <Text style={[typography.h3]}>Thread Thickness</Text>
+              <Badge label={THREAD_THICKNESS_LABEL(threadThicknessScale)} tone="indigo" />
+            </View>
+            <Text style={[typography.bodySmall, styles.densityHint]}>
+              Visualize a finer or heavier thread on the design above — this only changes how the
+              preview is drawn, not the stitch file itself (thread gauge depends on the spool
+              loaded into the machine, not the digitizing).
+            </Text>
+            <Slider
+              value={threadThicknessScale}
+              min={0.6}
+              max={1.8}
+              step={0.05}
+              onValueChange={setThreadThicknessScale}
+              accessibilityLabel="Thread thickness preview"
+            />
+            <View style={styles.densityScaleRow}>
+              <Text style={[typography.caption, { color: colors.textTertiary }]}>Fine</Text>
+              <Text style={[typography.caption, { color: colors.textTertiary }]}>Standard</Text>
+              <Text style={[typography.caption, { color: colors.textTertiary }]}>Heavy</Text>
             </View>
           </Card>
 

@@ -1,13 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Play, Pause, RotateCcw, Zap, MousePointerClick, X } from 'lucide-react-native';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-  Easing,
-} from 'react-native-reanimated';
 import { colors, radius, shadows, spacing, typography } from '@/theme';
 import { ScreenContainer } from '@/components/layout/ScreenContainer';
 import { Card } from '@/components/ui/Card';
@@ -36,9 +29,7 @@ export default function SimulatorScreen() {
   const [progress, setProgress] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<Speed>('1');
-  const [needlePos, setNeedlePos] = useState<{ xPct: number; yPct: number } | null>(null);
   const [selectedStitch, setSelectedStitch] = useState<SelectedStitchInfo | null>(null);
-  const needleBob = useSharedValue(0);
 
   useEffect(() => {
     designsService.list().then((list) => {
@@ -82,18 +73,6 @@ export default function SimulatorScreen() {
     }, 100);
     return () => clearInterval(interval);
   }, [playing, plan, speed]);
-
-  useEffect(() => {
-    if (playing) {
-      needleBob.value = withRepeat(withTiming(1, { duration: 220, easing: Easing.linear }), -1, true);
-    } else {
-      needleBob.value = withTiming(0, { duration: 150 });
-    }
-  }, [playing]);
-
-  const needleStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: needleBob.value * -6 }],
-  }));
 
   const selectDesign = (id: string) => {
     setSelectedId(id);
@@ -179,20 +158,9 @@ export default function SimulatorScreen() {
                 widthMm={sim.widthMm}
                 heightMm={sim.heightMm}
                 progress={progress}
-                onNeedlePosition={setNeedlePos}
                 onSelectStitch={setSelectedStitch}
+                needleBobbing={playing}
               />
-            )}
-            {progress > 0 && progress < 1 && needlePos && (
-              <Animated.View
-                style={[
-                  styles.needleWrap,
-                  { left: `${needlePos.xPct}%`, top: `${needlePos.yPct}%` },
-                  needleStyle,
-                ]}
-              >
-                <View style={styles.needleDot} />
-              </Animated.View>
             )}
             {progress >= 1 && (
               <View style={styles.completeBadge}>
@@ -383,20 +351,6 @@ const styles = StyleSheet.create({
   noPreviewText: {
     textAlign: 'center',
     color: colors.textSecondary,
-  },
-  needleWrap: {
-    position: 'absolute',
-    marginLeft: -6,
-    marginTop: -6,
-    alignItems: 'center',
-  },
-  needleDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: colors.white,
-    borderWidth: 2,
-    borderColor: colors.indigo,
   },
   completeBadge: {
     position: 'absolute',

@@ -1,8 +1,20 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, type LayoutChangeEvent } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type GestureResponderEvent,
+  type LayoutChangeEvent,
+} from 'react-native';
 import Svg, { Circle, Defs, Line, LinearGradient, Rect, Stop } from 'react-native-svg';
+import Animated, { useAnimatedProps, useSharedValue, withRepeat, withTiming, Easing } from 'react-native-reanimated';
+import { Maximize2, Minus, Plus } from 'lucide-react-native';
 import { colors as themeColors, radius } from '@/theme';
 import type { MmSegment } from '@/utils/stitchPreview';
+
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 export interface SelectedStitchInfo {
   /** 1-based ordinal among every playback unit (stitches + jumps) up to
@@ -31,6 +43,21 @@ interface EmbossedStitchCanvasProps {
    * stitch or jump was closest to the tap, or null when the tap didn't
    * land near anything (or the design has nothing visible yet). */
   onSelectStitch?: (info: SelectedStitchInfo | null) => void;
+  /** Multiplies the rendered thread width (and its shadow/sheen offsets)
+   * around the physically-accurate default of ~0.22mm. 1 = default real
+   * thread thickness; <1 thinner, >1 thicker -- lets a user visually
+   * "zoom in" on how dense/heavy a design will stitch out without
+   * changing the actual geometry. */
+  threadThicknessScale?: number;
+  /** Plays a small up/down bob on the live needle-tip marker while true --
+   * intended for "currently stitching" playback (the simulator screen);
+   * left off (static tip, no marker at all once stitched to completion)
+   * everywhere else. */
+  needleBobbing?: boolean;
+  /** Hides the built-in pan/zoom control pill (the design is still
+   * draggable/zoomable either way) -- for callers with limited vertical
+   * space who want to render their own zoom affordance instead. */
+  hideZoomControls?: boolean;
 }
 
 // 1 "preview unit" = 0.1mm of real design size -- gives plenty of
@@ -67,6 +94,20 @@ const DECIMATE_ABOVE = 5000;
 // shaded stroke per raw segment instead, same as this component's
 // original approach, rather than let the page hang.
 const MAX_SEGMENTS_FOR_DASHING = 2500;
+
+// Pan/zoom bounds -- 1x always shows the whole design (the original,
+// un-zoomable behavior); 6x is roughly "inspect individual stitches on a
+// small monogram" territory, matched to the kind of zoom level real
+// digitizing tools (and embroidai's own viewer) settle on.
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 6;
+const ZOOM_BUTTON_STEP = 1.6;
+const TAP_MOVE_THRESHOLD_PX = 8;
+const DOUBLE_TAP_MS = 320;
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
 
 function clamp255(v: number): number {
   return Math.max(0, Math.min(255, v));
@@ -183,6 +224,24 @@ function pointSegmentDist2(px: number, py: number, ax: number, ay: number, bx: n
   return (px - cx) ** 2 + (py - cy) ** 2;
 }
 
+interface PanState {
+  x: number;
+  y: number;
+}
+
+type DragState = {
+  isPinch: boolean;
+  moved: boolean;
+  // Single-finger / mouse drag tracking (screen px, last-seen position).
+  lastX: number;
+  lastY: number;
+  startX: number;
+  startY: number;
+  // Two-finger pinch tracking.
+  pinchStartDist: number;
+  pinchStartZoom: number;
+};
+
 /**
  * Realistic *2D* raised/embossed thread rendering -- not a true 3D scene
  * (no WebGL, no camera, nothing that needs a GPU shader pipeline mobile
@@ -214,6 +273,14 @@ function pointSegmentDist2(px: number, py: number, ax: number, ay: number, bx: n
  * (see `onSelectStitch`) tappable just like a real stitch so a jump run
  * that looks suspiciously long can actually be inspected, not just seen.
  *
+ * On top of that render, this component is its own interactive stage:
+ * mouse-wheel / pinch-to-zoom (anchored under the cursor/pinch midpoint),
+ * click-and-drag / single-finger pan, and a small zoom control pill
+ * (+ / reset / -, plus the current zoom %) -- all implemented as a
+ * variable SVG `viewBox` window rather than a CSS transform, so stroke
+ * widths and hit-testing both stay exactly correct at any zoom level with
+ * no extra coordinate math anywhere else in the app.
+ *
  * Built with react-native-svg so the exact same component (and the exact
  * same visual result) renders on web *and* native, rather than relying on
  * an HTML <canvas>, which has no native equivalent in Expo.
@@ -226,25 +293,62 @@ export function EmbossedStitchCanvas({
   progress,
   onNeedlePosition,
   onSelectStitch,
+  threadThicknessScale = 1,
+  needleBobbing = false,
+  hideZoomControls = false,
 }: EmbossedStitchCanvasProps) {
   const viewW = Math.max(1, widthMm * PX_PER_MM);
   const viewH = Math.max(1, heightMm * PX_PER_MM);
 
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [selectedKey, setSelectedKey] = useState<number | null>(null);
-  // Used for hit-testing taps: `measure()` reliably returns this node's
-  // on-screen page offset on BOTH native (iOS/Android) and web, unlike
-  // `nativeEvent.locationX/locationY` -- react-native-web's Pressable
-  // leaves `nativeEvent` as the raw browser MouseEvent, which has no
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState<PanState>({ x: 0, y: 0 });
+  // Tracks which design (by its real-world size) the current zoom/pan
+  // belongs to -- compared during render, not in an effect, using React's
+  // own sanctioned "adjust state when a prop changes" pattern: reset
+  // zoom/pan synchronously in the same render a genuinely different
+  // design's dimensions show up, without an extra effect-triggered
+  // re-render. Deliberately keyed on widthMm/heightMm only (not
+  // `segments`), so re-digitizing the same design at a different density
+  // leaves whatever region the user zoomed into exactly where they left
+  // it.
+  const [viewDesignKey, setViewDesignKey] = useState({ widthMm, heightMm });
+  if (viewDesignKey.widthMm !== widthMm || viewDesignKey.heightMm !== heightMm) {
+    setViewDesignKey({ widthMm, heightMm });
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }
+
+  // Used for hit-testing taps/drags: `measure()` reliably returns this
+  // node's on-screen page offset on BOTH native (iOS/Android) and web,
+  // unlike `nativeEvent.locationX/locationY` -- react-native-web leaves
+  // `nativeEvent` as the raw browser MouseEvent, which has no
   // locationX/locationY at all, so relying on those silently broke every
   // tap on web (desktop + the web preview this app actually ships to
   // first). pageX/pageY + measure() works identically everywhere.
-  const pressableRef = useRef<React.ElementRef<typeof Pressable> | null>(null);
+  const stageRef = useRef<React.ElementRef<typeof View> | null>(null);
+  const containerPageOffsetRef = useRef({ x: 0, y: 0 });
+  const dragRef = useRef<DragState | null>(null);
+  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
 
-  const onLayout = useCallback((e: LayoutChangeEvent) => {
-    const { width, height } = e.nativeEvent.layout;
-    setContainerSize({ width, height });
+  const refreshContainerOffset = useCallback(() => {
+    const node = stageRef.current as unknown as {
+      measure?: (cb: (x: number, y: number, w: number, h: number, pageX: number, pageY: number) => void) => void;
+    } | null;
+    node?.measure?.((_x, _y, _w, _h, pageX, pageY) => {
+      containerPageOffsetRef.current = { x: pageX, y: pageY };
+    });
   }, []);
+
+  const onLayout = useCallback(
+    (e: LayoutChangeEvent) => {
+      const { width, height } = e.nativeEvent.layout;
+      setContainerSize({ width, height });
+      refreshContainerOffset();
+    },
+    [refreshContainerOffset]
+  );
 
   // Dash every segment into individual stitches, and scale into view-space,
   // exactly ONCE per design (keyed only on `segments`/dimensions, never on
@@ -299,23 +403,47 @@ export function EmbossedStitchCanvas({
     return { ...d, x2: d.x1 + (d.x2 - d.x1) * frac, y2: d.y1 + (d.y2 - d.y1) * frac };
   }, [scaledAllDashes, fullCount, frac, total]);
 
-  const tip = useMemo(() => {
-    if (partialDash) return { x: partialDash.x2 / PX_PER_MM, y: partialDash.y2 / PX_PER_MM };
+  // View-space (0.1mm units) needle tip, for the in-SVG marker -- kept
+  // separate from the mm-space `tip` reported via `onNeedlePosition` below
+  // so the marker itself stays correctly placed under any zoom/pan without
+  // any external caller needing to know this component's view transform.
+  const tipView = useMemo(() => {
+    if (partialDash) return { x: partialDash.x2, y: partialDash.y2 };
     if (fullCount > 0) {
       const last = scaledAllDashes[fullCount - 1];
-      return { x: last.x2 / PX_PER_MM, y: last.y2 / PX_PER_MM };
+      return { x: last.x2, y: last.y2 };
     }
     return null;
   }, [partialDash, scaledAllDashes, fullCount]);
 
   React.useEffect(() => {
-    if (tip) {
-      onNeedlePosition?.({ xPct: (tip.x / Math.max(1, widthMm)) * 100, yPct: (tip.y / Math.max(1, heightMm)) * 100 });
+    if (tipView) {
+      onNeedlePosition?.({
+        xPct: (tipView.x / PX_PER_MM / Math.max(1, widthMm)) * 100,
+        yPct: (tipView.y / PX_PER_MM / Math.max(1, heightMm)) * 100,
+      });
     } else {
       onNeedlePosition?.(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tip, widthMm, heightMm]);
+  }, [tipView, widthMm, heightMm]);
+
+  // Small up/down bob for the live needle marker while actively playing --
+  // mirrors the pulse the simulator screen used to animate externally,
+  // just internalized here so it stays correctly positioned at any zoom.
+  const needleBob = useSharedValue(0);
+  useEffect(() => {
+    if (needleBobbing) {
+      needleBob.value = withRepeat(withTiming(1, { duration: 220, easing: Easing.linear }), -1, true);
+    } else {
+      needleBob.value = withTiming(0, { duration: 150 });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needleBobbing]);
+
+  const needleAnimatedProps = useAnimatedProps(() => ({
+    cy: (tipView?.y ?? 0) - needleBob.value * PX_PER_MM * 0.6,
+  }));
 
   let drawDashes: Dash[] = useMemo(
     () => (partialDash ? [...scaledAllDashes.slice(0, fullCount), partialDash] : scaledAllDashes.slice(0, fullCount)),
@@ -352,37 +480,109 @@ export function EmbossedStitchCanvas({
 
   const fullEmboss = stitchDashes.length <= EMBOSS_LAYER_CAP;
 
-  // Thread width scales gently with design size so a tiny monogram and a
-  // large back patch both look proportionate rather than either needle-thin
-  // or comically thick.
-  const strokeW = Math.max(1.6, Math.min(3.2, PX_PER_MM * 0.22));
+  // Thread width is tied to a physically-accurate real-world diameter
+  // (~0.22mm, a typical embroidery thread) rather than scaling with
+  // design size -- PX_PER_MM is a fixed mm<->view-space ratio, so this is
+  // already "to scale" for any design. `threadThicknessScale` is the only
+  // thing that moves it now, letting a user see a heavier/lighter thread
+  // without that being confused for a change in the actual digitized
+  // geometry.
+  const thicknessScale = clamp(threadThicknessScale, 0.4, 2.5);
+  const strokeW = Math.max(1.6, Math.min(3.2, PX_PER_MM * 0.22)) * thicknessScale;
   const shadowOffset = strokeW * 0.42;
   const highlightOffset = strokeW * 0.24;
 
+  // --- Pan/zoom geometry -----------------------------------------------
+  // Zooming is implemented as a variable SVG viewBox window rather than a
+  // CSS/Animated transform: the <Svg> element's own on-screen rendered
+  // size (and therefore its "xMidYMid meet" letterboxing offsets) never
+  // changes as the viewBox shrinks, so `baseScale` below -- the familiar
+  // "fit the whole design in the container" scale -- stays valid as a
+  // building block at every zoom level; the actual screen-to-content
+  // scale at a given zoom is just `zoom * baseScale`.
+  const baseScale = containerSize.width > 0 && containerSize.height > 0
+    ? Math.min(containerSize.width / viewW, containerSize.height / viewH)
+    : 0;
+  const renderedW = viewW * baseScale;
+  const renderedH = viewH * baseScale;
+  const letterboxX = (containerSize.width - renderedW) / 2;
+  const letterboxY = (containerSize.height - renderedH) / 2;
+
+  const visibleW = viewW / zoom;
+  const visibleH = viewH / zoom;
+  const effectiveViewBox = `${pan.x} ${pan.y} ${visibleW} ${visibleH}`;
+
+  const clampPan = useCallback(
+    (p: PanState, z: number): PanState => {
+      const vw = viewW / z;
+      const vh = viewH / z;
+      const maxX = Math.max(0, viewW - vw);
+      const maxY = Math.max(0, viewH - vh);
+      return { x: clamp(p.x, 0, maxX), y: clamp(p.y, 0, maxY) };
+    },
+    [viewW, viewH]
+  );
+
+  /** Maps a point in local (container-relative) screen pixels to SVG
+   * user-space (view-space) coordinates, at an arbitrary zoom/pan --
+   * shared by tap-resolution, wheel-zoom anchoring, and pinch anchoring. */
+  const localToSvg = useCallback(
+    (localX: number, localY: number, z: number, p: PanState) => {
+      if (baseScale <= 0) return { x: 0, y: 0 };
+      const scale = z * baseScale;
+      return { x: p.x + (localX - letterboxX) / scale, y: p.y + (localY - letterboxY) / scale };
+    },
+    [baseScale, letterboxX, letterboxY]
+  );
+
+  /** Zooms to `newZoomRaw`, keeping whatever content point was under
+   * (localX, localY) *before* the change in exactly the same screen spot
+   * afterwards -- the standard "zoom to cursor / pinch midpoint" feel. */
+  const zoomAt = useCallback(
+    (localX: number, localY: number, newZoomRaw: number) => {
+      if (baseScale <= 0) return;
+      const newZoom = clamp(newZoomRaw, MIN_ZOOM, MAX_ZOOM);
+      setZoom((prevZoom) => {
+        if (Math.abs(newZoom - prevZoom) < 1e-4) return prevZoom;
+        setPan((prevPan) => {
+          const anchor = localToSvg(localX, localY, prevZoom, prevPan);
+          const scaleNew = newZoom * baseScale;
+          const panXNew = anchor.x - (localX - letterboxX) / scaleNew;
+          const panYNew = anchor.y - (localY - letterboxY) / scaleNew;
+          return clampPan({ x: panXNew, y: panYNew }, newZoom);
+        });
+        return newZoom;
+      });
+    },
+    [baseScale, letterboxX, letterboxY, localToSvg, clampPan]
+  );
+
+  const zoomCenter = useCallback(
+    (factor: number) => {
+      zoomAt(containerSize.width / 2, containerSize.height / 2, zoom * factor);
+    },
+    [zoomAt, containerSize, zoom]
+  );
+
+  const resetView = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
   // Tap-to-inspect: maps a tap's on-screen pixel position back into the
-  // SVG's own viewBox coordinate space, accounting for the same
-  // "xMidYMid meet" letterboxing the <Svg> itself uses by default when the
-  // container's aspect ratio doesn't exactly match the design's -- a
-  // square logo in a wider/taller stage frame is letterboxed, and a naive
-  // tap-position mapping that ignored that would misread every tap near
-  // the letterboxed edges. Then finds whichever currently-visible dash
-  // (stitch or jump) is closest, by real on-screen distance, and reports
-  // it back via `onSelectStitch` -- this is the actual "click to inspect
-  // lines/jumps/points" feature: without it, the simulator could only be
-  // watched, never interrogated.
+  // SVG's own viewBox coordinate space (now zoom/pan-aware via
+  // `localToSvg`), then finds whichever currently-visible dash (stitch or
+  // jump) is closest, by real on-screen distance, and reports it back via
+  // `onSelectStitch` -- the actual "click to inspect lines/jumps/points"
+  // feature: without it, the simulator could only be watched, never
+  // interrogated.
   const resolveTapAtLocalPoint = useCallback(
     (localX: number, localY: number) => {
       if (!onSelectStitch || containerSize.width <= 0 || containerSize.height <= 0 || scaledDashes.length === 0) {
         onSelectStitch?.(null);
         return;
       }
-      const scale = Math.min(containerSize.width / viewW, containerSize.height / viewH);
-      const renderedW = viewW * scale;
-      const renderedH = viewH * scale;
-      const offsetX = (containerSize.width - renderedW) / 2;
-      const offsetY = (containerSize.height - renderedH) / 2;
-      const svgX = (localX - offsetX) / scale;
-      const svgY = (localY - offsetY) / scale;
+      const { x: svgX, y: svgY } = localToSvg(localX, localY, zoom, pan);
 
       let bestIdx = -1;
       let bestDist = Infinity;
@@ -394,11 +594,11 @@ export function EmbossedStitchCanvas({
           bestIdx = i;
         }
       }
-      // A generous-but-bounded hit radius (12mm of view-space, i.e.
-      // forgiving enough for a fingertip on a small screen without
-      // matching a tap that landed nowhere near any thread).
-      const hitRadiusPx = PX_PER_MM * 12;
-      if (bestIdx < 0 || bestDist > hitRadiusPx * hitRadiusPx) {
+      // A generous-but-bounded hit radius in *screen* pixels, converted to
+      // view-space at the current zoom -- the same forgiving-fingertip
+      // radius whether the user is zoomed out or zoomed in close.
+      const hitRadiusViewSpace = (PX_PER_MM * 12) / zoom;
+      if (bestIdx < 0 || bestDist > hitRadiusViewSpace * hitRadiusViewSpace) {
         setSelectedKey(null);
         onSelectStitch(null);
         return;
@@ -424,60 +624,225 @@ export function EmbossedStitchCanvas({
         colorHex: picked.kind === 'jump' ? null : palette[picked.colorIndex % Math.max(1, palette.length)] ?? null,
       });
     },
-    [containerSize, viewW, viewH, scaledDashes, scaledAllDashes, total, palette, onSelectStitch]
+    [containerSize, scaledDashes, scaledAllDashes, total, palette, onSelectStitch, localToSvg, zoom, pan]
   );
 
-  const handlePress = useCallback(
-    (evt: {
-      nativeEvent: {
-        locationX?: number;
-        locationY?: number;
-        pageX?: number;
-        pageY?: number;
-      };
-    }) => {
-      if (!onSelectStitch) return;
-      const { locationX, locationY, pageX, pageY } = evt.nativeEvent;
-      const node = pressableRef.current as unknown as {
-        measure?: (
-          cb: (x: number, y: number, w: number, h: number, pageX: number, pageY: number) => void
-        ) => void;
-      } | null;
-      // `locationX`/`locationY` are populated reliably on native iOS/Android,
-      // but react-native-web's Pressable leaves `nativeEvent` as the raw
-      // browser MouseEvent, which never has them -- so on web we instead
-      // combine the event's page coordinates with this node's own
-      // on-screen page offset (via `measure`, which works identically on
-      // both native and web) to derive the same local, container-relative
-      // point.
-      if (typeof locationX === 'number' && typeof locationY === 'number') {
-        resolveTapAtLocalPoint(locationX, locationY);
+  const maybeDoubleTap = useCallback((localX: number, localY: number): boolean => {
+    const now = Date.now();
+    const last = lastTapRef.current;
+    lastTapRef.current = { time: now, x: localX, y: localY };
+    if (last && now - last.time < DOUBLE_TAP_MS && Math.hypot(localX - last.x, localY - last.y) < 30) {
+      lastTapRef.current = null;
+      return true;
+    }
+    return false;
+  }, []);
+
+  const handleTapAt = useCallback(
+    (localX: number, localY: number) => {
+      if (maybeDoubleTap(localX, localY)) {
+        resetView();
         return;
       }
-      if (typeof pageX === 'number' && typeof pageY === 'number' && node?.measure) {
-        node.measure((_x, _y, _w, _h, containerPageX, containerPageY) => {
-          resolveTapAtLocalPoint(pageX - containerPageX, pageY - containerPageY);
-        });
-        return;
-      }
-      onSelectStitch(null);
+      resolveTapAtLocalPoint(localX, localY);
     },
-    [onSelectStitch, resolveTapAtLocalPoint]
+    [maybeDoubleTap, resetView, resolveTapAtLocalPoint]
   );
+
+  const panBy = useCallback(
+    (dxScreen: number, dyScreen: number) => {
+      if (baseScale <= 0) return;
+      const scale = zoom * baseScale;
+      setPan((p) => clampPan({ x: p.x - dxScreen / scale, y: p.y - dyScreen / scale }, zoom));
+    },
+    [baseScale, zoom, clampPan]
+  );
+
+  // --- Web: wheel-to-zoom + mouse drag-to-pan ---------------------------
+  // Attached as a raw, non-passive DOM listener (rather than the React
+  // `onWheel` prop) specifically so `preventDefault()` actually works --
+  // modern browsers/React register synthetic wheel listeners as passive
+  // by default, which silently makes `preventDefault()` a no-op (and logs
+  // a console warning) and lets the whole page scroll along with the zoom
+  // gesture.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const node = stageRef.current as unknown as HTMLElement | null;
+    if (!node || typeof node.addEventListener !== 'function') return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      refreshContainerOffset();
+      const localX = e.clientX - containerPageOffsetRef.current.x;
+      const localY = e.clientY - containerPageOffsetRef.current.y;
+      const factor = Math.exp(clamp(-e.deltaY * 0.0015, -0.4, 0.4));
+      zoomAt(localX, localY, zoom * factor);
+    };
+    node.addEventListener('wheel', handleWheel, { passive: false });
+    return () => node.removeEventListener('wheel', handleWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom, zoomAt, refreshContainerOffset]);
+
+  const handleMouseDown = useCallback(
+    (e: { clientX: number; clientY: number }) => {
+      refreshContainerOffset();
+      dragRef.current = {
+        isPinch: false,
+        moved: false,
+        lastX: e.clientX,
+        lastY: e.clientY,
+        startX: e.clientX,
+        startY: e.clientY,
+        pinchStartDist: 0,
+        pinchStartZoom: zoom,
+      };
+    },
+    [refreshContainerOffset, zoom]
+  );
+
+  const handleMouseMove = useCallback(
+    (e: { clientX: number; clientY: number }) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const dx = e.clientX - drag.lastX;
+      const dy = e.clientY - drag.lastY;
+      drag.lastX = e.clientX;
+      drag.lastY = e.clientY;
+      if (!drag.moved && Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > TAP_MOVE_THRESHOLD_PX) {
+        drag.moved = true;
+      }
+      if (drag.moved) panBy(dx, dy);
+    },
+    [panBy]
+  );
+
+  const endMouseDrag = useCallback(
+    (e: { clientX: number; clientY: number }) => {
+      const drag = dragRef.current;
+      dragRef.current = null;
+      if (!drag) return;
+      if (!drag.moved) {
+        handleTapAt(e.clientX - containerPageOffsetRef.current.x, e.clientY - containerPageOffsetRef.current.y);
+      }
+    },
+    [handleTapAt]
+  );
+
+  // --- Native: touch pan + pinch-zoom (RN responder system) -------------
+  const touchDist = (a: Readonly<{ pageX: number; pageY: number }>, b: Readonly<{ pageX: number; pageY: number }>) =>
+    Math.hypot(a.pageX - b.pageX, a.pageY - b.pageY);
+
+  const onResponderGrant = useCallback(
+    (evt: GestureResponderEvent) => {
+      refreshContainerOffset();
+      const touches = evt.nativeEvent.touches ?? [];
+      if (touches.length >= 2) {
+        dragRef.current = {
+          isPinch: true,
+          moved: true,
+          lastX: 0,
+          lastY: 0,
+          startX: 0,
+          startY: 0,
+          pinchStartDist: touchDist(touches[0], touches[1]),
+          pinchStartZoom: zoom,
+        };
+      } else {
+        const t = touches[0];
+        dragRef.current = {
+          isPinch: false,
+          moved: false,
+          lastX: t?.pageX ?? 0,
+          lastY: t?.pageY ?? 0,
+          startX: t?.pageX ?? 0,
+          startY: t?.pageY ?? 0,
+          pinchStartDist: 0,
+          pinchStartZoom: zoom,
+        };
+      }
+    },
+    [refreshContainerOffset, zoom]
+  );
+
+  const onResponderMove = useCallback(
+    (evt: GestureResponderEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const touches = evt.nativeEvent.touches ?? [];
+      if (touches.length >= 2) {
+        if (!drag.isPinch) {
+          drag.isPinch = true;
+          drag.pinchStartDist = touchDist(touches[0], touches[1]);
+          drag.pinchStartZoom = zoom;
+        }
+        const dist = touchDist(touches[0], touches[1]);
+        const ratio = drag.pinchStartDist > 1 ? dist / drag.pinchStartDist : 1;
+        const midX = (touches[0].pageX + touches[1].pageX) / 2 - containerPageOffsetRef.current.x;
+        const midY = (touches[0].pageY + touches[1].pageY) / 2 - containerPageOffsetRef.current.y;
+        drag.moved = true;
+        zoomAt(midX, midY, drag.pinchStartZoom * ratio);
+      } else {
+        const t = touches[0];
+        if (!t) return;
+        const dx = t.pageX - drag.lastX;
+        const dy = t.pageY - drag.lastY;
+        drag.lastX = t.pageX;
+        drag.lastY = t.pageY;
+        if (!drag.moved && Math.hypot(t.pageX - drag.startX, t.pageY - drag.startY) > TAP_MOVE_THRESHOLD_PX) {
+          drag.moved = true;
+        }
+        if (drag.moved) panBy(dx, dy);
+      }
+    },
+    [zoom, zoomAt, panBy]
+  );
+
+  const onResponderRelease = useCallback(() => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (drag && !drag.moved && !drag.isPinch) {
+      handleTapAt(drag.startX - containerPageOffsetRef.current.x, drag.startY - containerPageOffsetRef.current.y);
+    }
+  }, [handleTapAt]);
 
   const selectedDash = useMemo(() => {
     if (selectedKey === null) return null;
     return scaledAllDashes[selectedKey - 1] ?? null;
   }, [selectedKey, scaledAllDashes]);
 
+  const isWeb = Platform.OS === 'web';
+  const zoomPct = Math.round(zoom * 100);
+
+  // react-native-web accepts standard DOM mouse events and CSS cursor
+  // styling on a plain View; RN's own prop/style types don't know about
+  // either, so this one small slice of props is built as `any` rather than
+  // fighting the types prop-by-prop.
+  const webOnlyProps: Record<string, unknown> = isWeb
+    ? {
+        onMouseDown: handleMouseDown,
+        onMouseMove: handleMouseMove,
+        onMouseUp: endMouseDrag,
+        onMouseLeave: () => {
+          dragRef.current = null;
+        },
+        style: [styles.wrap, { cursor: zoom > 1 ? 'grab' : 'default' }],
+      }
+    : {};
+
   return (
-    <Pressable
-      ref={pressableRef}
+    <View
+      ref={stageRef}
       style={styles.wrap}
       onLayout={onLayout}
-      onPress={onSelectStitch ? handlePress : undefined}
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponder={() => true}
+      onResponderGrant={onResponderGrant}
+      onResponderMove={onResponderMove}
+      onResponderRelease={onResponderRelease}
+      onResponderTerminate={onResponderRelease}
+      {...webOnlyProps}
     >
-      <Svg width="100%" height="100%" viewBox={`0 0 ${viewW} ${viewH}`}>
+      <Svg width="100%" height="100%" viewBox={effectiveViewBox}>
         <Defs>
           {palette.map((hex, i) => (
             // gradientUnits="userSpaceOnUse" with a FIXED direction spanning
@@ -602,8 +967,48 @@ export function EmbossedStitchCanvas({
             <Circle cx={selectedDash.x2} cy={selectedDash.y2} r={PX_PER_MM * 0.35} fill={themeColors.indigo} />
           </>
         )}
+
+        {/* live needle-tip marker -- in-SVG so it stays correctly placed
+            under any zoom/pan without any external caller needing to know
+            this component's view transform */}
+        {tipView && progress > 0 && progress < 1 && (
+          <AnimatedCircle
+            cx={tipView.x}
+            animatedProps={needleAnimatedProps}
+            r={PX_PER_MM * 0.6}
+            fill="#FFFFFF"
+            stroke={themeColors.indigo}
+            strokeWidth={2}
+          />
+        )}
       </Svg>
-    </Pressable>
+
+      {!hideZoomControls && (
+        <View style={styles.zoomPill} pointerEvents="box-none">
+          <Pressable
+            onPress={() => zoomCenter(1 / ZOOM_BUTTON_STEP)}
+            style={styles.zoomBtn}
+            disabled={zoom <= MIN_ZOOM + 0.01}
+          >
+            <Minus size={14} color={zoom <= MIN_ZOOM + 0.01 ? themeColors.textTertiary : themeColors.textPrimary} />
+          </Pressable>
+          <Pressable onPress={resetView} style={styles.zoomBtn}>
+            {zoom > 1.01 ? (
+              <Text style={styles.zoomPct}>{zoomPct}%</Text>
+            ) : (
+              <Maximize2 size={13} color={themeColors.textPrimary} />
+            )}
+          </Pressable>
+          <Pressable
+            onPress={() => zoomCenter(ZOOM_BUTTON_STEP)}
+            style={styles.zoomBtn}
+            disabled={zoom >= MAX_ZOOM - 0.01}
+          >
+            <Plus size={14} color={zoom >= MAX_ZOOM - 0.01 ? themeColors.textTertiary : themeColors.textPrimary} />
+          </Pressable>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -614,5 +1019,36 @@ const styles = StyleSheet.create({
     borderRadius: radius.card,
     overflow: 'hidden',
     backgroundColor: '#F4F3EF',
+  },
+  zoomPill: {
+    position: 'absolute',
+    right: 8,
+    bottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: 999,
+    paddingHorizontal: 2,
+    paddingVertical: 2,
+    gap: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  zoomBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomPct: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: themeColors.textPrimary,
+    minWidth: 30,
+    textAlign: 'center',
   },
 });
