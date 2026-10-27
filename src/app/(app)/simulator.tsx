@@ -7,6 +7,7 @@ import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
+import { Slider } from '@/components/ui/Slider';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { EmbossedStitchCanvas, type SelectedStitchInfo } from '@/components/ui/EmbossedStitchCanvas';
 import { useResponsive } from '@/hooks/useResponsive';
@@ -22,6 +23,14 @@ function formatClock(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+// Friendly label for the preview-only thread-thickness slider's current
+// value, matching the identical control on the Preview screen.
+function threadThicknessLabel(scale: number): string {
+  if (scale < 0.85) return 'Fine';
+  if (scale > 1.2) return 'Heavy';
+  return 'Standard';
+}
+
 export default function SimulatorScreen() {
   const { isDesktop } = useResponsive();
   const [designs, setDesigns] = useState<Design[] | null>(null);
@@ -30,6 +39,10 @@ export default function SimulatorScreen() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState<Speed>('1');
   const [selectedStitch, setSelectedStitch] = useState<SelectedStitchInfo | null>(null);
+  // Preview-only visualization aid (see the identical control on the Preview
+  // screen) -- doesn't affect the actual stitch geometry, just how thick the
+  // rendered thread looks.
+  const [threadThicknessScale, setThreadThicknessScale] = useState(1);
 
   useEffect(() => {
     designsService.list().then((list) => {
@@ -160,6 +173,7 @@ export default function SimulatorScreen() {
                 progress={progress}
                 onSelectStitch={setSelectedStitch}
                 needleBobbing={playing}
+                threadThicknessScale={threadThicknessScale}
               />
             )}
             {progress >= 1 && (
@@ -281,6 +295,24 @@ export default function SimulatorScreen() {
             <Text style={[typography.bodySmall, { color: colors.textTertiary, marginTop: spacing.sm }]}>
               Color {colorIndex + 1} of {Math.max(1, palette.length)} — extracted from this design&apos;s real artwork
             </Text>
+          </Card>
+
+          <Card style={{ marginTop: spacing.md }}>
+            <View style={styles.densityHeaderRow}>
+              <Text style={typography.h3}>Thread Thickness</Text>
+              <Badge label={threadThicknessLabel(threadThicknessScale)} tone="indigo" />
+            </View>
+            <Text style={[typography.bodySmall, { color: colors.textTertiary, marginTop: spacing.xs }]}>
+              Preview-only — visualizes a finer or heavier thread, doesn&apos;t change the real stitch file.
+            </Text>
+            <Slider
+              value={threadThicknessScale}
+              min={0.6}
+              max={1.8}
+              step={0.05}
+              onValueChange={setThreadThicknessScale}
+              accessibilityLabel="Thread thickness preview"
+            />
           </Card>
         </View>
       </View>
@@ -431,6 +463,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.xs,
     marginBottom: spacing.md,
+  },
+  densityHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   statRow: {
     flexDirection: 'row',
