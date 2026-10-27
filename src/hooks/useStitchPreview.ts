@@ -4,6 +4,7 @@ import { analyzeImageViaBackend } from '@/services/digitizing/backendClient';
 import { analyzeImage, buildStitchSegments, resolveImageUri } from '@/utils/stitchEngine';
 import { gridSegmentsToMm, pointsToMmSegments, type MmSegment } from '@/utils/stitchPreview';
 import type { DstPoint } from '@/utils/dstWriter';
+import type { StitchTypeBreakdownEntry } from '@/services/digitizing/backendClient';
 
 export type StitchPreviewSource = 'backend' | 'client' | 'none';
 
@@ -26,6 +27,12 @@ export interface StitchPreviewResult {
    * create/auto-digitize/preview.tsx's live density slider, the first
    * caller that needed this). */
   dstPoints: DstPoint[] | null;
+  /** Which stitch types the current plan actually uses and how much of it
+   * is each (SATIN for thin strokes, FILL for larger areas, etc.), only
+   * ever populated on `source === 'backend'` -- see
+   * `StitchTypeBreakdownEntry`'s own docstring. Empty on the client-canvas
+   * fallback, which has no per-region type classification to offer. */
+  stitchTypeBreakdown: StitchTypeBreakdownEntry[];
 }
 
 const EMPTY: Omit<StitchPreviewResult, 'loading' | 'source'> = {
@@ -34,6 +41,7 @@ const EMPTY: Omit<StitchPreviewResult, 'loading' | 'source'> = {
   widthMm: 0,
   heightMm: 0,
   dstPoints: null,
+  stitchTypeBreakdown: [],
 };
 
 /**
@@ -96,6 +104,7 @@ export function useStitchPreview(
           loading: false,
           source: 'backend',
           dstPoints: backendResult.points,
+          stitchTypeBreakdown: backendResult.stitchTypeBreakdown,
         });
         return;
       }
@@ -120,6 +129,7 @@ export function useStitchPreview(
           loading: false,
           source: 'client',
           dstPoints: null,
+          stitchTypeBreakdown: [],
         });
       } catch {
         if (!cancelled) setState({ ...EMPTY, loading: false, source: 'none' });

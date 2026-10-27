@@ -22,6 +22,19 @@ import {
   resolveBorderWidthMm,
 } from '@/services/digitizing';
 import { summarizePoints } from '@/utils/stitchPlanner';
+import type { StitchTypeBreakdownEntry } from '@/services/digitizing/backendClient';
+
+// Friendly, non-technical labels for the automatic per-region stitch type
+// classifier's output (see stitchpro-backend's digitizer/stitches/satin/
+// thin_region.py) -- "FILL" and "CROSS_STITCH" are the engine's own
+// ObjectType names, not something a non-digitizer user should have to
+// parse.
+const STITCH_TYPE_LABELS: Record<StitchTypeBreakdownEntry['type'], string> = {
+  SATIN: 'Satin',
+  FILL: 'Fill (Tatami)',
+  CROSS_STITCH: 'Cross-Stitch',
+  RUNNING: 'Running',
+};
 
 // How long to wait after the user stops moving the density slider before
 // actually re-digitizing at the new value. A real digitize call re-runs
@@ -211,6 +224,27 @@ export default function DesignPreviewScreen() {
               <Text style={[typography.caption, { color: colors.textTertiary }]}>Dense</Text>
             </View>
           </Card>
+
+          {sim.stitchTypeBreakdown.length > 0 && (
+            <Card style={{ marginTop: spacing.md }}>
+              <Text style={[typography.h3, { marginBottom: spacing.xs }]}>Stitch Types</Text>
+              <Text style={[typography.bodySmall, styles.densityHint]}>
+                StitchPro automatically picks the best stitch type for each region of your design — thin
+                strokes and border bars get a dense satin column, larger areas get an efficient fill.
+              </Text>
+              <View style={styles.badgeGrid}>
+                {sim.stitchTypeBreakdown.map((entry) => (
+                  <Badge
+                    key={entry.type}
+                    label={`${STITCH_TYPE_LABELS[entry.type] ?? entry.type} · ${entry.objectCount} region${
+                      entry.objectCount === 1 ? '' : 's'
+                    }`}
+                    tone="indigo"
+                  />
+                ))}
+              </View>
+            </Card>
+          )}
 
           <Card style={{ marginTop: spacing.md }}>
             <Text style={[typography.h3, { marginBottom: spacing.md }]}>Stitch Plan</Text>

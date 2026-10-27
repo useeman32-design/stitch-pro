@@ -120,11 +120,28 @@ export async function isBackendReachable(): Promise<boolean> {
   }
 }
 
+/** One entry of the backend's per-stitch-type breakdown -- see
+ * stitchpro-backend's digitizer/points_export.py docstring. The
+ * auto-digitizer classifies each detected region independently (thin
+ * strokes/border bars -> SATIN, larger fills -> FILL, etc. -- see
+ * digitizer/stitches/satin/thin_region.py), so a single design routinely
+ * mixes stitch types across its regions; this is purely informational
+ * (never part of the `points`/DST export contract) and lets a UI show
+ * e.g. "SATIN · 4 regions" chips without parsing per-object detail out of
+ * the flat point stream. Sorted by the backend in descending stitch-count
+ * order. */
+export interface StitchTypeBreakdownEntry {
+  type: 'RUNNING' | 'SATIN' | 'FILL' | 'CROSS_STITCH';
+  objectCount: number;
+  stitchCount: number;
+}
+
 export interface BackendPointsResult {
   widthMm: number;
   heightMm: number;
   threads: string[];
   points: DstPoint[];
+  stitchTypeBreakdown: StitchTypeBreakdownEntry[];
 }
 
 const IMAGE_FETCH_TIMEOUT_MS = 20000;
@@ -297,6 +314,7 @@ export async function analyzeImageViaBackend(
       heightMm: data.height_mm,
       threads: data.threads ?? [],
       points: data.points,
+      stitchTypeBreakdown: Array.isArray(data.stitchTypeBreakdown) ? data.stitchTypeBreakdown : [],
     };
   } catch {
     return null;
