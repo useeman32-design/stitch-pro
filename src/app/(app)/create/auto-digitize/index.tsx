@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import { UploadCloud, ImageIcon, X, RefreshCw } from 'lucide-react-native';
+import { UploadCloud, ImageIcon, X, RefreshCw, Camera } from 'lucide-react-native';
 import { colors, radius, spacing, typography } from '@/theme';
 import { ScreenContainer } from '@/components/layout/ScreenContainer';
 import { Card } from '@/components/ui/Card';
@@ -16,9 +16,31 @@ import { resolveImageUri } from '@/utils/stitchEngine';
 
 export default function UploadArtworkScreen() {
   const router = useRouter();
-  const { artwork, setArtwork, clearArtwork } = useDigitizeWizard();
+  const params = useLocalSearchParams<{ source?: string }>();
+  const { artwork, setArtwork, clearArtwork, sourceMode, setSourceMode } = useDigitizeWizard();
   const { show } = useToast();
   const [picking, setPicking] = useState(false);
+
+  // The "Photo of Embroidery" card (create/index.tsx) links here with
+  // `?source=embroidered_photo` -- sync that into the wizard context once
+  // on mount so every downstream backend call this wizard makes
+  // (background-removal preview has no classification step, but vectorize/
+  // analyze both do) passes `forcePhoto: true`. Plain "Auto Digitize"
+  // leaves this at the context's default ('artwork'), unchanged behavior.
+  useEffect(() => {
+    if (params.source === 'embroidered_photo' && sourceMode !== 'embroidered_photo') {
+      setSourceMode('embroidered_photo');
+    } else if (params.source !== 'embroidered_photo' && !params.source && sourceMode === 'embroidered_photo') {
+      // Landing back on the plain /create/auto-digitize URL (e.g. via the
+      // bottom nav) after previously using the photo entry point resets
+      // to the regular flow, rather than silently staying "stuck" in
+      // photo mode for an upload the user no longer associates with it.
+      setSourceMode('artwork');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.source]);
+
+  const isPhotoMode = sourceMode === 'embroidered_photo';
 
   const pickImage = async () => {
     setPicking(true);
@@ -53,10 +75,25 @@ export default function UploadArtworkScreen() {
   return (
     <ScreenContainer>
       <WizardStepHeader
-        title="Auto Digitize"
-        subtitle="Upload your artwork and StitchPro's AI will analyze it, then turn it into a ready-to-stitch embroidery design."
+        title={isPhotoMode ? 'Photo of Embroidery' : 'Auto Digitize'}
+        subtitle={
+          isPhotoMode
+            ? "Upload a photo of an item that's already embroidered — a monogrammed shirt, a stitched patch, a cap logo — and StitchPro will extract the design as a real, editable vector you can clean up and re-stitch."
+            : "Upload your artwork and StitchPro's AI will analyze it, then turn it into a ready-to-stitch embroidery design."
+        }
         currentIndex={0}
       />
+
+      {isPhotoMode && (
+        <Card style={styles.photoHintCard}>
+          <Camera size={18} color={colors.indigo} />
+          <Text style={[typography.bodySmall, styles.photoHintText]}>
+            Best results: even lighting with no harsh glare, shoot mostly straight-on, and fill the frame with the
+            stitched design. We&apos;ll remove the garment/background next, then trace the stitching into shapes you
+            can select, delete, redraw, or add to on the next screen before anything is turned into stitches.
+          </Text>
+        </Card>
+      )}
 
       {!artwork ? (
         <Pressable
@@ -65,14 +102,19 @@ export default function UploadArtworkScreen() {
           style={({ pressed }) => [styles.dropzone, pressed && { opacity: 0.85 }]}
         >
           <View style={styles.dropzoneIcon}>
-            <UploadCloud size={30} color={colors.indigo} strokeWidth={2} />
+            {isPhotoMode ? (
+              <Camera size={30} color={colors.indigo} strokeWidth={2} />
+            ) : (
+              <UploadCloud size={30} color={colors.indigo} strokeWidth={2} />
+            )}
           </View>
           <Text style={[typography.h3, { color: colors.textPrimary }]}>
-            {picking ? 'Opening file picker…' : 'Click to upload your artwork'}
+            {picking ? 'Opening file picker…' : isPhotoMode ? 'Click to upload a photo' : 'Click to upload your artwork'}
           </Text>
           <Text style={[typography.bodySmall, styles.dropzoneHint]}>
-            PNG, JPG or SVG — up to 10MB. For best results, use a high-resolution image with clear
-            edges.
+            {isPhotoMode
+              ? 'PNG or JPG — up to 10MB. A clear, well-lit photo of the stitched design works best.'
+              : 'PNG, JPG or SVG — up to 10MB. For best results, use a high-resolution image with clear edges.'}
           </Text>
         </Pressable>
       ) : (
@@ -113,7 +155,9 @@ export default function UploadArtworkScreen() {
       )}
 
       <View style={styles.sampleSection}>
-        <Text style={[typography.bodySmall, styles.sampleLabel]}>Or try a sample design</Text>
+        <Text style={[typography.bodySmall, styles.sampleLabel]}>
+          {isPhotoMode ? 'Or try a sample embroidery photo' : 'Or try a sample design'}
+        </Text>
         <View style={styles.sampleRow}>
           {sampleArtworks.map((s) => {
             const active = artwork?.source === 'sample' && artwork.name === s.name;
@@ -165,6 +209,17 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     textAlign: 'center',
     maxWidth: 340,
+  },
+  photoHintCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+    backgroundColor: colors.indigoTint,
+  },
+  photoHintText: {
+    flex: 1,
+    color: colors.textSecondary,
   },
   previewCard: {
     padding: spacing.md,

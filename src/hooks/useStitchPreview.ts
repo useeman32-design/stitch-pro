@@ -80,7 +80,15 @@ export function useStitchPreview(
    * regions instead, so the preview (and the final digitized design)
    * reflects the user's edits, not a fresh re-trace of the original
    * image. See `regionsToPointsViaBackend`. */
-  regions?: VectorRegion[] | null
+  regions?: VectorRegion[] | null,
+  /** See `AnalyzeImageOptions.forcePhoto` -- only affects the raw-image
+   * `analyzeImageViaBackend` fallback branch below (when `regions` isn't
+   * set yet, e.g. the vectorize screen was skipped or unreachable);
+   * `regionsToPointsViaBackend` doesn't re-classify, so this has no effect
+   * once real regions exist. Pass `true` for the "Photo of Embroidery"
+   * entry point (create/index.tsx), same as every other backend call in
+   * that wizard. */
+  forcePhoto?: boolean
 ): StitchPreviewResult {
   const uri = resolveImageUri(source);
   const hasRegions = !!(regions && regions.length);
@@ -109,6 +117,7 @@ export function useStitchPreview(
             densityMm,
             stitchLengthMm,
             borderWidthMm,
+            forcePhoto,
           });
 
       if (cancelled) return;
@@ -179,6 +188,7 @@ export function useStitchPreview(
     stitchLengthMm,
     borderWidthMm,
     regions,
+    forcePhoto,
   ]);
 
   if (!uri && !hasRegions) {

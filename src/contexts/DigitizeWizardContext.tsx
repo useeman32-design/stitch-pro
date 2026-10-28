@@ -15,7 +15,23 @@ export interface UploadedArtwork {
   source: 'upload' | 'sample' | 'generated';
 }
 
+/** Which Auto Digitize upload entry point the user came from -- both go
+ * through the exact same wizard screens/backend pipeline, but
+ * `'embroidered_photo'` (the "Photo of Embroidery" card on
+ * create/index.tsx, for "extract a design from a photo of an item that's
+ * already stitched") tailors the upload screen's copy for that case and
+ * sets `forcePhoto: true` on every backend classify/vectorize call, so a
+ * sharply-lit close-up photo can't accidentally get misclassified as
+ * flat clipart and skip the artworkify flattening it actually needs --
+ * see backendClient.ts's `AnalyzeImageOptions.forcePhoto`. `'artwork'`
+ * (the default, from the regular "Auto Digitize" card) keeps relying on
+ * the automatic classifier, unchanged. */
+export type DigitizeSourceMode = 'artwork' | 'embroidered_photo';
+
 interface DigitizeWizardValue {
+  /** See `DigitizeSourceMode`. Defaults to `'artwork'`. */
+  sourceMode: DigitizeSourceMode;
+  setSourceMode: (mode: DigitizeSourceMode) => void;
   artwork: UploadedArtwork | null;
   analysis: AnalysisResult | null;
   settings: DigitizeSettings;
@@ -85,6 +101,7 @@ interface DigitizeWizardValue {
 const DigitizeWizardContext = createContext<DigitizeWizardValue | undefined>(undefined);
 
 export function DigitizeWizardProvider({ children }: { children: React.ReactNode }) {
+  const [sourceMode, setSourceModeState] = useState<DigitizeSourceMode>('artwork');
   const [artwork, setArtworkState] = useState<UploadedArtwork | null>(null);
   const [analysis, setAnalysisState] = useState<AnalysisResult | null>(null);
   const [settings, setSettings] = useState<DigitizeSettings>(defaultDigitizeSettings);
@@ -133,6 +150,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
   }, []);
 
   const reset = useCallback(() => {
+    setSourceModeState('artwork');
     setArtworkState(null);
     setAnalysisState(null);
     setSettings(defaultDigitizeSettings);
@@ -148,6 +166,8 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
 
   const value = useMemo(
     () => ({
+      sourceMode,
+      setSourceMode: setSourceModeState,
       artwork,
       analysis,
       settings,
@@ -182,6 +202,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       reset,
     }),
     [
+      sourceMode,
       artwork,
       analysis,
       settings,

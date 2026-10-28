@@ -104,7 +104,9 @@ export default function DesignSettingsScreen() {
     letterMeta,
     vectorRegions,
     vectorRegionsSizeMm,
+    sourceMode,
   } = useDigitizeWizard();
+  const forcePhoto = sourceMode === 'embroidered_photo';
   const [threads, setThreads] = useState<ThreadColor[]>([]);
   const [generating, setGenerating] = useState(false);
   const [colorModal, setColorModal] = useState<{ mode: 'add' | 'replace'; index?: number } | null>(null);
@@ -217,6 +219,7 @@ export default function DesignSettingsScreen() {
             stitchLengthMm: DENSITY_STITCH_LENGTH_MM[settings.density],
             borderWidthMm: resolveBorderWidthMm(settings),
             removeBackground,
+            forcePhoto,
           })
         : null;
 

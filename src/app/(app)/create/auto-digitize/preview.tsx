@@ -91,7 +91,9 @@ export default function DesignPreviewScreen() {
     setStitchPlan,
     setDstPoints,
     setThreadColors,
+    sourceMode,
   } = useDigitizeWizard();
+  const forcePhoto = sourceMode === 'embroidered_photo';
   const { isDesktop } = useResponsive();
 
   useEffect(() => {
@@ -167,7 +169,8 @@ export default function DesignPreviewScreen() {
     liveDensityMm,
     liveStitchLengthMm,
     liveBorderWidthMm,
-    !letterMeta ? regionsForPreview : null
+    !letterMeta ? regionsForPreview : null,
+    forcePhoto
   );
   // From here on, `activeSim` is what the rest of this screen renders from
   // and syncs into the wizard context -- identical shape either way, so

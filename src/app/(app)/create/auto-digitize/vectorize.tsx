@@ -37,8 +37,9 @@ type Tab = 'background' | 'regions';
  */
 export default function VectorizeScreen() {
   const router = useRouter();
-  const { artwork, settings, removeBackground, vectorRegions, setVectorRegions, bgStrokes, setBgStrokes } =
+  const { artwork, settings, removeBackground, vectorRegions, setVectorRegions, bgStrokes, setBgStrokes, sourceMode } =
     useDigitizeWizard();
+  const forcePhoto = sourceMode === 'embroidered_photo';
   // Trace at whatever design size is currently in effect (defaults to
   // 90x90mm until the user visits Settings) -- if they later pick a
   // different size there, the stored regions are rescaled to match (see
@@ -60,6 +61,7 @@ export default function VectorizeScreen() {
       const result = await vectorizeImageViaBackend(artwork.uri, previewWidthMm, previewHeightMm, {
         removeBackground,
         bgStrokes: strokes,
+        forcePhoto,
       });
       if (result) {
         setRegions(result.regions);
@@ -69,7 +71,7 @@ export default function VectorizeScreen() {
       }
       setLoading(false);
     },
-    [artwork, removeBackground]
+    [artwork, removeBackground, forcePhoto]
   );
 
   useEffect(() => {

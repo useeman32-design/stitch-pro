@@ -70,6 +70,13 @@ export const createOptions: CreateOption[] = [
     tint: '#5B4FE8',
   },
   {
+    key: 'embroidered-photo',
+    title: 'Photo of Embroidery',
+    description: "Have a photo of an item that's already stitched? Extract it as an editable design.",
+    href: '/create/auto-digitize?source=embroidered_photo',
+    tint: '#C2622A',
+  },
+  {
     key: 'text',
     title: 'Text',
     description: 'Create beautiful embroidered text.',

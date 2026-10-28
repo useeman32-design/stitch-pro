@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Sparkles, Type, PenTool, ShieldHalf, SquareDashedMousePointer } from 'lucide-react-native';
+import { Sparkles, Type, PenTool, ShieldHalf, SquareDashedMousePointer, Camera } from 'lucide-react-native';
 import { colors, spacing, typography } from '@/theme';
 import { ScreenContainer } from '@/components/layout/ScreenContainer';
 import { StepIndicator } from '@/components/ui/StepIndicator';
@@ -11,6 +11,7 @@ import { useResponsive } from '@/hooks/useResponsive';
 
 const iconByKey: Record<string, any> = {
   'auto-digitize': Sparkles,
+  'embroidered-photo': Camera,
   text: Type,
   monogram: PenTool,
   badge: ShieldHalf,

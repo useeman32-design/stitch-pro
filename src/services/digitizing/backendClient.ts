@@ -204,6 +204,17 @@ export interface AnalyzeImageOptions {
    * `removeBackgroundPreviewViaBackend` above) -- the server recomputes
    * the identical mask, so this stays consistent with what they saw. */
   removeBackground?: boolean;
+  /** Skips the backend's own flat-vs-photo classification vote and always
+   * treats the upload as a photograph needing `artworkify` flattening
+   * before quantization -- see stitchpro-backend's digitizer/pipeline.py
+   * `force_photo` param docstring. Set this for the "extract a design
+   * from a photo of an already-embroidered item" entry point
+   * (create/index.tsx's "Photo of Embroidery" card), where the user has
+   * already told us it's a photo of real stitching, not a flat logo
+   * export -- an explicit signal that's strictly more reliable than the
+   * automatic heuristic. Omit (or `false`) for the regular Auto Digitize
+   * flow, which should keep relying on the automatic classifier. */
+  forcePhoto?: boolean;
 }
 
 /** Converts a `Blob` into a `data:` URI -- works identically on web and
@@ -307,6 +318,7 @@ export async function analyzeImageViaBackend(
     if (options.stitchLengthMm !== undefined) form.append('stitch_length_mm', String(options.stitchLengthMm));
     if (options.borderWidthMm !== undefined) form.append('border_width_mm', String(options.borderWidthMm));
     if (options.removeBackground !== undefined) form.append('remove_background', String(options.removeBackground));
+    if (options.forcePhoto !== undefined) form.append('force_photo', String(options.forcePhoto));
 
     const response = await fetch(`${baseUrl}/api/design/image-to-points`, {
       method: 'POST',
@@ -557,6 +569,8 @@ export async function vectorizeImageViaBackend(
     removeBackground?: boolean;
     autoVectorize?: boolean;
     bgStrokes?: BgStroke[];
+    /** See `AnalyzeImageOptions.forcePhoto` -- same meaning here. */
+    forcePhoto?: boolean;
   } = {}
 ): Promise<VectorizeResult | null> {
   const baseUrl = getBackendUrl();
@@ -580,6 +594,7 @@ export async function vectorizeImageViaBackend(
     if (options.removeBackground !== undefined) form.append('remove_background', String(options.removeBackground));
     if (options.autoVectorize !== undefined) form.append('auto_vectorize', String(options.autoVectorize));
     if (options.bgStrokes && options.bgStrokes.length) form.append('bg_strokes', JSON.stringify(options.bgStrokes));
+    if (options.forcePhoto !== undefined) form.append('force_photo', String(options.forcePhoto));
 
     const response = await fetch(`${baseUrl}/api/design/vectorize`, {
       method: 'POST',
