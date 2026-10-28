@@ -661,6 +661,129 @@ each fully tested before moving on.
 
 ---
 
+## Session: Lettering engine wired through the full Create Text wizard (this session)
+
+`create/text.tsx` (Bold Block / Varsity fonts + Straight layout only --
+Arc layouts and every other font still use the pre-existing
+render-to-image + generic auto-digitize path, unchanged) now uses
+stitchpro-backend's dedicated lettering engine end-to-end, for both the
+live-typing preview and the final exported design, not just a preview.
+
+**New/changed files (frontend):**
+- `src/hooks/useLetteringPreview.ts` (new) -- same `StitchPreviewResult`
+  shape `useStitchPreview` returns, built around
+  `backendClient.textToPointsViaBackend`. No client-side fallback:
+  `source` only ever resolves to `'backend'` or `'none'`.
+- `src/contexts/DigitizeWizardContext.tsx` -- new `letterMeta: {text,
+  color} | null` field, cleared alongside `artwork` in `reset()`/
+  `clearArtwork()`.
+- `create/text.tsx` -- live preview renders real satin lettering when
+  eligible (`isLetteringEligible = (font==='Bold Block'||font==='Varsity')
+  && layout==='Straight' && !!text.trim()`); `Continue` only sets
+  `letterMeta` if the lettering preview resolved against the exact text
+  currently typed (debounce-race guard), else falls back to the legacy
+  path cleanly.
+- `auto-digitize/analyzing.tsx` -- skips the generic `analyzeArtwork`
+  call when `letterMeta` is set, synthesizes the `AnalysisResult`
+  directly instead.
+- `auto-digitize/settings.tsx` -- also skips its own generic
+  backend-image-trace call for lettering designs (would've been real
+  backend work thrown away moments later on the next screen) --  hands
+  off with a placeholder `stitchPlan` and lets `preview.tsx`'s own
+  lettering fetch populate the real one.
+- `auto-digitize/preview.tsx` -- `const activeSim = letterMeta ?
+  lettering : sim`, then every other consumer in the file (stats,
+  canvas, the `stitchPlan`/`dstPoints`/`threadColors` write-back effect,
+  stitch-type breakdown UI) reads `activeSim.*` unmodified -- the real
+  lettering output rides the exact same write/export path every other
+  design type already uses, with zero per-consumer branching.
+- `src/components/ui/EmbossedStitchCanvas.tsx` -- floor the on-screen
+  stroke width at ~1px (accounting for the current zoom level), instead
+  of always using a fixed physically-accurate ~0.2mm thread width. A
+  long multi-word lettering line can be 5-10x wider than a typical logo;
+  fitting the *whole* thing into the preview stage at 1x zoom was
+  shrinking real thread-width strokes to sub-pixel and making the design
+  look completely blank even though its geometry was correct. No-op for
+  any design that already rendered at a sane scale (confirmed via git
+  stash diff -- zero new lint warnings on this file from the change).
+
+**Real bug found and fixed in `stitchpro-backend` along the way**
+(`digitizer/lettering/engine.py`, commit `8b5118e`): `build_text_design`
+was pre-centering its own X geometry around `x=0` before handing it to
+`design_to_points`/`design_to_dst_bytes`, both of which *already* apply
+their own single `-width_mm/2` (and `-height_mm/2`) centering offset --
+the convention every other `EmbroideryDesign` producer uses (origin-based
+`[0, width_mm] x [0, height_mm]`, e.g. `digitizer/pipeline.py`'s
+image-to-mm mapping). The double offset shifted the whole design left by
+a further half-width -- invisible for a short word, but for a long one
+(a realistic multi-word business name at a real letter height, e.g.
+"OBI STORES" at 90mm cap height -> ~695mm wide) it pushed most/all of
+the design outside the `[0, width_mm]` box the frontend preview (and a
+real embroidery hoop) expect. This would have produced a real,
+downloadable DST file with letters stitched well off-center too, not
+just a broken preview. Fixed by shifting the engine's own geometry to
+start at `(0, 0)` instead of pre-centering. Added a regression test
+(`test_build_text_design_points_bounding_box_matches_declared_size`)
+that builds a long string and checks the point stream lands within its
+own declared bounding box. All 249 backend tests pass (248 previous + 1
+new).
+
+**Verification performed:** `npx tsc --noEmit` clean; `npx eslint` clean
+on every touched/created file (remaining warnings/errors on
+`preview.tsx`/`settings.tsx` confirmed pre-existing via `git stash` +
+re-lint, not introduced); backend `pytest` 249/249 passing; live
+Playwright run through the real dev servers (`text.tsx` with "OBI
+STORES" in Bold Block -> `analyzing.tsx` -> `settings.tsx` -> `preview.tsx`)
+confirmed the lettering engine's real ~13.7k-stitch satin plan
+(`SATIN · 19 REGIONS`, 1 thread color, 211.8m thread) lands in
+`stitchPlan`/`dstPoints`/`threadColors`, and that the thread-colored SVG
+lines are now correctly positioned within `[0, width_mm]` (confirmed via
+direct DOM/SVG inspection, both before and after the stroke-width floor
+fix) and visibly rendered (not literally invisible) in the preview
+canvas. Legacy fonts/layouts (Modern Sans, or any Arc layout) confirmed
+unaffected -- still render via the original generic path exactly as
+before.
+
+**Known remaining limitation (not fixed, lower priority):** a very wide
+lettering design (several hundred mm, e.g. a long multi-word name at a
+large cap height) still renders fairly faint/sparse at the preview's
+default 1x ("whole design visible") zoom level, even after the
+stroke-width floor fix -- the individual stitch dashes are real,
+correctly positioned, and clearly legible once the user pinch/scroll-
+zooms in (the canvas already supports this), but the *default* view for
+an extreme aspect-ratio design doesn't auto-zoom to a more legible
+level. A future pass could make `EmbossedStitchCanvas`'s default zoom
+auto-pick something more readable than "fit entire design" when a
+design's aspect ratio is extreme (e.g. fit to a minimum comfortable
+stitch-dash density instead of always fitting 100% of the design), but
+this wasn't attempted this session given it'd change the component's
+default-zoom behavior for every caller, not just lettering.
+`monogram.tsx`'s "Stacked Block" style is still explicitly out of scope
+(not touched).
+
+**Environment notes (same recurring issues, yet again):** both repos'
+`origin` git remote vanished again this session (recovered via the
+established recipe -- `git remote add origin <token-url>`, fetch,
+compare `HEAD` vs `origin/main`, `git reset origin/main` on `stitch-pro`
+specifically since its `HEAD` had drifted back to the old `6b0fdf6`
+rename-era commit while working-tree files were still current; backend's
+`HEAD` matched `origin/main` exactly, just needed the remote re-added).
+`stitch-pro/node_modules` and `stitchpro-backend/venv` were both
+completely gone (not just a broken symlink this time) -- `npm install`
+and a from-scratch `python3 -m venv venv && pip install -r
+requirements.txt` (plus `pip install pytest`, which isn't in
+`requirements.txt`) rebuilt both cleanly. `qa_tools`' own
+`node_modules`/Playwright's cached Chromium under `~/.cache` were also
+gone (expected -- `.cache` is explicitly excluded from workspace
+snapshots) -- `npm install` + `npx playwright install chromium
+--with-deps` restored them. The frontend Expo dev server was OOM-killed
+and restarted at least 4 times over the course of this session's live
+verification; this remains a standing constraint of the sandbox (1.9GB
+RAM, no swap) -- keep live-browser checks lean and re-check
+`free -h`/process liveness before each one.
+
+---
+
 ## 6. Frontend (`stitch-pro`) — structure & status
 
 - Expo **SDK 58** (upgraded from 57 this cycle — `3d7727a`), Expo Router,
@@ -887,6 +1010,16 @@ each fully tested before moving on.
 
 ## 8. Suggested next steps (pick up here)
 
+0. ~~**Wire the lettering engine through the full Create Text wizard**~~ —
+   **done this session.** See the "Session: Lettering engine wired
+   through the full Create Text wizard" entry above for full detail,
+   including a real backend positioning bug found and fixed along the
+   way. Remaining low-priority follow-up: `EmbossedStitchCanvas`'s
+   default "fit whole design" zoom renders a very wide multi-word
+   lettering design fairly faint at 1x (correct, zoomable, just not
+   legible without zooming in first) -- consider an aspect-ratio-aware
+   default zoom if this is ever reported as confusing. `monogram.tsx`'s
+   "Stacked Block" style is still out of scope.
 1. ~~**Frontend wiring for the new backend capabilities (`6ab041b`)**~~ —
    **done this session.** `settings.tsx` now has a Stitch Type (Fill/
    Cross-Stitch) chip picker + an Angle slider, and `handleGenerate` calls
