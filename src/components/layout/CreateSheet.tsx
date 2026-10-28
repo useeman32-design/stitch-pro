@@ -1,14 +1,22 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Sparkles, Type, PenTool, ShieldHalf, SquareDashedMousePointer } from 'lucide-react-native';
+import { Sparkles, Type, PenTool, ShieldHalf, SquareDashedMousePointer, Camera } from 'lucide-react-native';
 import { spacing } from '@/theme';
 import { BottomSheet } from '@/components/ui/BottomSheet';
 import { CreateOptionCard } from '@/components/ui/CreateOptionCard';
 import { createOptions } from '@/constants/navigation';
 
+// Kept in sync by hand with `createOptions` (navigation.ts) -- the exact
+// same duplicated map also lives in QuickCreateSection.tsx (the dashboard)
+// and create/index.tsx's own screen. A `createOptions` entry with no
+// matching key here renders `<undefined .../>`, which React throws on
+// immediately -- treat all three maps as one unit: adding a
+// `createOptions` entry means updating all three, not just the screen you
+// happen to be testing.
 const iconByKey: Record<string, any> = {
   'auto-digitize': Sparkles,
+  'embroidered-photo': Camera,
   text: Type,
   monogram: PenTool,
   badge: ShieldHalf,
