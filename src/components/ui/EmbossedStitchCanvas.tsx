@@ -496,7 +496,26 @@ export function EmbossedStitchCanvas({
   // placement before they even export.
   const stopDashes = useMemo(() => scaledDashes.filter((d) => d.kind === 'stop'), [scaledDashes]);
 
-  const fullEmboss = stitchDashes.length <= EMBOSS_LAYER_CAP;
+  // Whether to render the shadow+sheen emboss passes must be decided from
+  // the design's fixed, final stitch-dash count (`scaledAllDashes`, stable
+  // for the whole design) -- NEVER from `stitchDashes.length`, which is
+  // only the currently-*visible* prefix and keeps growing throughout
+  // playback. This is the exact same bug class the `decimateStep` comment
+  // above describes, and it was reproduced live: for any design whose
+  // total stitch count crosses EMBOSS_LAYER_CAP partway through playback
+  // (true of almost every real design -- e.g. a 12,482-stitch logo passes
+  // 1,200 stitches at ~10% progress), `fullEmboss` flipped from true to
+  // false mid-animation the instant the growing visible count crossed the
+  // cap, instantly dropping the shadow and sheen passes (roughly 2/3 of
+  // the on-screen line elements) in a single frame -- which reads to a
+  // user watching playback as large parts of their design suddenly
+  // vanishing. Keying the decision to the stable total instead means it
+  // is made once, before playback starts, and never changes mid-stitch-out.
+  const totalStitchDashCount = useMemo(
+    () => scaledAllDashes.reduce((n, d) => (d.kind !== 'jump' && d.kind !== 'stop' ? n + 1 : n), 0),
+    [scaledAllDashes]
+  );
+  const fullEmboss = totalStitchDashCount <= EMBOSS_LAYER_CAP;
 
   // --- Pan/zoom geometry -----------------------------------------------
   // Zooming is implemented as a variable SVG viewBox window rather than a
