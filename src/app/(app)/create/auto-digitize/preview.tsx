@@ -34,7 +34,23 @@ const STITCH_TYPE_LABELS: Record<StitchTypeBreakdownEntry['type'], string> = {
   FILL: 'Fill (Tatami)',
   CROSS_STITCH: 'Cross-Stitch',
   RUNNING: 'Running',
+  BEAN: 'Bean',
+  MOTIF: 'Motif',
+  PUFF_3D: '3D Puff',
+  APPLIQUE: 'Appliqué',
 };
+
+// Stitch types that require the physical embroidery machine to pause
+// mid-design (a real pyembroidery STOP command in the exported file — see
+// stitchpro-backend's formats/dst/writer.py and formats/points_writer.py)
+// so the operator can place foam/fabric and trim before it continues. The
+// engine selects these automatically per-region (no manual toggle), so the
+// user needs this called out clearly rather than discovering it only once
+// their machine stops unexpectedly.
+const STITCH_TYPES_REQUIRING_PAUSE: ReadonlySet<StitchTypeBreakdownEntry['type']> = new Set([
+  'PUFF_3D',
+  'APPLIQUE',
+]);
 
 // Friendly label for the preview-only thread-thickness slider's current
 // value, next to its own "Fine / Standard / Heavy" scale row.
@@ -274,7 +290,8 @@ export default function DesignPreviewScreen() {
               <Text style={[typography.h3, { marginBottom: spacing.xs }]}>Stitch Types</Text>
               <Text style={[typography.bodySmall, styles.densityHint]}>
                 StitchPro automatically picks the best stitch type for each region of your design — thin
-                strokes and border bars get a dense satin column, larger areas get an efficient fill.
+                strokes become bean or satin stitches, repeating shapes become a motif, larger areas get
+                an efficient fill, and bold solid shapes may become 3D puff or appliqué.
               </Text>
               <View style={styles.badgeGrid}>
                 {sim.stitchTypeBreakdown.map((entry) => (
@@ -283,10 +300,16 @@ export default function DesignPreviewScreen() {
                     label={`${STITCH_TYPE_LABELS[entry.type] ?? entry.type} · ${entry.objectCount} region${
                       entry.objectCount === 1 ? '' : 's'
                     }`}
-                    tone="indigo"
+                    tone={STITCH_TYPES_REQUIRING_PAUSE.has(entry.type) ? 'warning' : 'indigo'}
                   />
                 ))}
               </View>
+              {sim.stitchTypeBreakdown.some((entry) => STITCH_TYPES_REQUIRING_PAUSE.has(entry.type)) && (
+                <Text style={[typography.bodySmall, styles.densityHint, { marginTop: spacing.sm }]}>
+                  ⚠ This design includes 3D Puff or Appliqué regions — your embroidery machine will pause
+                  mid-stitch so you can place foam or fabric and trim before it continues.
+                </Text>
+              )}
             </Card>
           )}
 

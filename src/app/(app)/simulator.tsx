@@ -37,6 +37,16 @@ export default function SimulatorScreen() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [playing, setPlaying] = useState(false);
+  // True right after playback auto-stops at a real machine pause (a
+  // PUFF_3D/APPLIQUE region's STOP command, see stitchpro-backend's
+  // formats/dst/writer.py) -- distinct from the normal end-of-design
+  // "complete" state, so the user understands *why* it stopped mid-design
+  // and that pressing Play resumes rather than restarts.
+  const [pausedForStop, setPausedForStop] = useState(false);
+  // Tracks the highest segment index already paused at, so resuming
+  // playback doesn't immediately re-trigger the same stop it just left.
+  // Reset whenever the design (and therefore its segment list) changes.
+  const lastHandledStopIndexRef = useRef(-1);
   const [speed, setSpeed] = useState<Speed>('1');
   const [selectedStitch, setSelectedStitch] = useState<SelectedStitchInfo | null>(null);
   // Preview-only visualization aid (see the identical control on the Preview
@@ -71,12 +81,40 @@ export default function SimulatorScreen() {
     plan?.colorCount ?? 5
   );
 
+  // New design/stitch plan loaded -- forget any stop this ref remembers
+  // pausing at, and clear any stale "paused for stop" banner from the
+  // previous design (matches the same `set-state-in-effect` pattern/
+  // justification used elsewhere in this app, e.g. useStitchPreview.ts,
+  // for resetting derived state when an external input changes).
+  useEffect(() => {
+    lastHandledStopIndexRef.current = -1;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting a stale banner when the design (and its segment list) changes
+    setPausedForStop(false);
+  }, [sim.segments]);
+
   useEffect(() => {
     if (!playing || !plan) return;
     const speedMultiplier = Number(speed);
+    const totalSegments = sim.segments.length;
     const interval = setInterval(() => {
       setProgress((p) => {
         const next = p + (1 / (plan.totalSeconds * 10)) * speedMultiplier;
+        // Real machine pauses (PUFF_3D/APPLIQUE STOP commands) interrupt
+        // playback exactly where they'd interrupt a real stitch-out --
+        // check every segment this tick just advanced across (not just
+        // the final one) so a fast speed/long tick can't skip past one.
+        if (totalSegments > 0) {
+          const prevIndex = Math.floor(p * totalSegments);
+          const nextIndexRaw = Math.floor(Math.min(next, 1) * totalSegments);
+          for (let idx = prevIndex; idx < nextIndexRaw && idx < totalSegments; idx++) {
+            if (sim.segments[idx]?.kind === 'stop' && idx > lastHandledStopIndexRef.current) {
+              lastHandledStopIndexRef.current = idx;
+              setPlaying(false);
+              setPausedForStop(true);
+              return Math.min(1, (idx + 1) / totalSegments);
+            }
+          }
+        }
         if (next >= 1) {
           setPlaying(false);
           return 1;
@@ -85,17 +123,20 @@ export default function SimulatorScreen() {
       });
     }, 100);
     return () => clearInterval(interval);
-  }, [playing, plan, speed]);
+  }, [playing, plan, speed, sim.segments]);
 
   const selectDesign = (id: string) => {
     setSelectedId(id);
     setProgress(0);
     setPlaying(false);
+    setPausedForStop(false);
     setSelectedStitch(null);
   };
 
   const restart = () => {
     setProgress(0);
+    lastHandledStopIndexRef.current = -1;
+    setPausedForStop(false);
     setPlaying(true);
   };
 
@@ -181,6 +222,11 @@ export default function SimulatorScreen() {
                 <Badge label="Stitch-out complete" tone="success" />
               </View>
             )}
+            {pausedForStop && progress < 1 && (
+              <View style={styles.completeBadge}>
+                <Badge label="⏸ Paused — place foam/fabric, then press Play" tone="warning" />
+              </View>
+            )}
             {!selectedStitch && sim.source !== 'none' && !sim.loading && (
               <View style={styles.inspectHint} pointerEvents="none">
                 <MousePointerClick size={12} color={colors.textTertiary} />
@@ -193,8 +239,20 @@ export default function SimulatorScreen() {
               <View style={styles.inspectCard}>
                 <View style={styles.inspectCardHeader}>
                   <Badge
-                    label={selectedStitch.kind === 'jump' ? 'Jump' : 'Stitch'}
-                    tone={selectedStitch.kind === 'jump' ? 'neutral' : 'indigo'}
+                    label={
+                      selectedStitch.kind === 'stop'
+                        ? 'Machine Pause'
+                        : selectedStitch.kind === 'jump'
+                          ? 'Jump'
+                          : 'Stitch'
+                    }
+                    tone={
+                      selectedStitch.kind === 'stop'
+                        ? 'warning'
+                        : selectedStitch.kind === 'jump'
+                          ? 'neutral'
+                          : 'indigo'
+                    }
                   />
                   <Pressable onPress={() => setSelectedStitch(null)} hitSlop={8} accessibilityLabel="Close">
                     <X size={15} color={colors.textTertiary} />
@@ -230,7 +288,10 @@ export default function SimulatorScreen() {
 
           <View style={styles.controlsRow}>
             <Pressable
-              onPress={() => setPlaying((p) => !p)}
+              onPress={() => {
+                setPlaying((p) => !p);
+                setPausedForStop(false);
+              }}
               style={styles.playButton}
               accessibilityLabel={playing ? 'Pause' : 'Play'}
             >

@@ -25,18 +25,21 @@ export interface MmSegment {
   x2: number;
   y2: number;
   colorIndex: number;
-  /** 'stitch' (default, real thread -- what every existing caller means)
-   * or 'jump' (the needle moves with the thread trimmed/lifted, no thread
-   * laid down between the two points). Jumps were previously discarded
-   * entirely by `pointsToMmSegments` -- real machine behavior, not a
-   * renderable stitch -- but that also meant there was no way to show or
-   * inspect them at all, which is exactly the "click to inspect lines/
-   * jumps/points" ask: you can't click on data that was thrown away
+  /** 'stitch' (default, real thread -- what every existing caller means),
+   * 'jump' (the needle moves with the thread trimmed/lifted, no thread
+   * laid down between the two points), or 'stop' (a real machine pause --
+   * PUFF_3D/APPLIQUE regions only -- the operator places foam/fabric and
+   * trims before the machine continues; a zero-length marker at the
+   * needle's current position, never a drawn line). Jumps were previously
+   * discarded entirely by `pointsToMmSegments` -- real machine behavior,
+   * not a renderable stitch -- but that also meant there was no way to
+   * show or inspect them at all, which is exactly the "click to inspect
+   * lines/jumps/points" ask: you can't click on data that was thrown away
    * before it ever reached the renderer. Kept optional (defaulting to
    * 'stitch' wherever omitted) so the older client-analysis path
-   * (`gridSegmentsToMm`, which has no concept of jumps at all) needs no
-   * changes. */
-  kind?: 'stitch' | 'jump';
+   * (`gridSegmentsToMm`, which has no concept of jumps/stops at all) needs
+   * no changes. */
+  kind?: 'stitch' | 'jump' | 'stop';
 }
 
 export interface StitchPreviewData {
@@ -72,7 +75,11 @@ export function gridSegmentsToMm(
  * interprets the stream: a `stitch` command lays visible thread from
  * wherever the needle currently is to its new position; a `jump` only
  * moves the needle (no segment drawn); a `colorChange` doesn't move the
- * needle but advances which palette color subsequent segments use.
+ * needle but advances which palette color subsequent segments use; a
+ * `stop` is a real machine pause at the needle's current position (same
+ * x/y as the point before it -- see formats/dst/writer.py's STOP handling)
+ * for a PUFF_3D/APPLIQUE region, rendered as a zero-length marker so a
+ * client can show the user exactly where their machine will stop.
  */
 export function pointsToMmSegments(
   points: DstPoint[],
@@ -100,6 +107,12 @@ export function pointsToMmSegments(
       // needle travel that a "click to inspect" view should be able to
       // show and report on, not silently hide as if it never happened.
       segments.push({ x1: cx, y1: cy, x2: xMm, y2: yMm, colorIndex, kind: 'jump' });
+    } else if (p.command === 'stop' && haveCurrent) {
+      // A real machine pause -- zero movement (the backend always emits
+      // this at the same position as the preceding point), so x1/y1 and
+      // x2/y2 are identical here on purpose. A renderer should draw this
+      // as a point marker, never a line.
+      segments.push({ x1: cx, y1: cy, x2: cx, y2: cy, colorIndex, kind: 'stop' });
     }
     if (p.command === 'colorChange') {
       colorIndex += 1;
@@ -112,3 +125,4 @@ export function pointsToMmSegments(
 
   return segments;
 }
+

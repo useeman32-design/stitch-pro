@@ -22,6 +22,11 @@ export interface RealStitchPlan {
   threadChanges: number;
   jumps: number;
   trims: number;
+  /** Real machine pauses (pyembroidery STOP commands) in this plan — only
+   * ever > 0 for server-digitized PUFF_3D/APPLIQUE regions (see
+   * stitchpro-backend's formats/dst/writer.py), never produced by this
+   * app's own client-side pixel-fill path. */
+  stops: number;
   estimatedThreadMeters: number;
   estimatedTimeMinutes: number;
   sizeMm: { width: number; height: number };
@@ -127,6 +132,7 @@ export function segmentsToDstPoints(
     threadChanges,
     jumps,
     trims: 0,
+    stops: 0,
     estimatedThreadMeters,
     estimatedTimeMinutes,
     sizeMm: { width: widthMm, height: heightMm },
@@ -146,6 +152,7 @@ export function summarizePoints(points: DstPoint[], widthMm: number, heightMm: n
   let stitches = 0;
   let jumps = 0;
   let colorChanges = 0;
+  let stops = 0;
   let threadLenMm = 0;
   let cx = 0;
   let cy = 0;
@@ -154,6 +161,13 @@ export function summarizePoints(points: DstPoint[], widthMm: number, heightMm: n
   for (const p of points) {
     if (p.command === 'colorChange') {
       colorChanges++;
+      continue;
+    }
+    if (p.command === 'stop') {
+      stops++;
+      cx = p.x;
+      cy = p.y;
+      have = true;
       continue;
     }
     if (have) {
@@ -181,6 +195,7 @@ export function summarizePoints(points: DstPoint[], widthMm: number, heightMm: n
     threadChanges: colorChanges,
     jumps,
     trims: 0,
+    stops,
     estimatedThreadMeters,
     estimatedTimeMinutes,
     sizeMm: { width: widthMm, height: heightMm },

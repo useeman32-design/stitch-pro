@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { LucideIcon } from 'lucide-react-native';
-import { Layers, Palette, Ruler, Clock, Repeat, MoveDiagonal, Scissors } from 'lucide-react-native';
+import { Layers, Palette, Ruler, Clock, Repeat, MoveDiagonal, Scissors, PauseCircle } from 'lucide-react-native';
 import { colors, radius, spacing, typography } from '@/theme';
 
 export interface StitchStatItem {
@@ -18,6 +18,10 @@ interface StitchStatsProps {
   threadChanges: number;
   jumps: number;
   trims: number;
+  /** Real machine pauses (pyembroidery STOP commands) for PUFF_3D/
+   * APPLIQUE regions -- only ever shown as its own stat when > 0, since
+   * most designs have none. */
+  stops?: number;
   sizeMm: { width: number; height: number };
 }
 
@@ -32,6 +36,10 @@ export function StitchStats(props: StitchStatsProps) {
     { icon: Scissors, label: 'Trims', value: String(props.trims) },
     { icon: Layers, label: 'Thread Used', value: `${props.estimatedThreadMeters} m` },
   ];
+
+  if (props.stops && props.stops > 0) {
+    items.push({ icon: PauseCircle, label: 'Machine Pauses', value: String(props.stops) });
+  }
 
   return (
     <View style={styles.grid}>

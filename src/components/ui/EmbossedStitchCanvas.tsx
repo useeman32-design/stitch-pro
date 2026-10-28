@@ -22,7 +22,7 @@ export interface SelectedStitchInfo {
    * machine operator would refer to a position in the stitch-out. */
   index: number;
   total: number;
-  kind: 'stitch' | 'jump';
+  kind: 'stitch' | 'jump' | 'stop';
   lengthMm: number;
   /** Design-space mm position (already un-centered, matching widthMm/
    * heightMm), of the unit's end point -- where the needle is after it. */
@@ -150,10 +150,11 @@ interface Dash extends MmSegment {
    * page. */
   nx: number;
   ny: number;
-  kind: 'stitch' | 'jump';
+  kind: 'stitch' | 'jump' | 'stop';
   /** Real mm-space length of this exact playback unit (a whole jump, or
    * one subdivided stitch dash) -- precomputed once here rather than
-   * recomputed from scaled view-space coordinates at inspect time. */
+   * recomputed from scaled view-space coordinates at inspect time. Always
+   * 0 for a 'stop' marker (no movement). */
   lengthMm: number;
 }
 
@@ -170,6 +171,14 @@ interface Dash extends MmSegment {
 function subdivideIntoDashes(segments: MmSegment[]): Dash[] {
   const out: Dash[] = [];
   for (const seg of segments) {
+    if (seg.kind === 'stop') {
+      // A real machine pause -- a zero-movement point marker, not a line,
+      // so it must be handled before the (otherwise correct) `len < 1e-6`
+      // degenerate-segment skip below, or it would silently vanish.
+      out.push({ ...seg, kind: 'stop', nx: 0, ny: -1, lengthMm: 0 });
+      continue;
+    }
+
     const dx = seg.x2 - seg.x1;
     const dy = seg.y2 - seg.y1;
     const len = Math.hypot(dx, dy);
@@ -370,7 +379,7 @@ export function EmbossedStitchCanvas({
             ...s,
             nx: 0,
             ny: 0,
-            kind: (s.kind ?? 'stitch') as 'stitch' | 'jump',
+            kind: (s.kind ?? 'stitch') as 'stitch' | 'jump' | 'stop',
             lengthMm: Math.hypot(s.x2 - s.x1, s.y2 - s.y1),
           })),
     [segments]
@@ -475,8 +484,17 @@ export function EmbossedStitchCanvas({
   }
 
   const scaledDashes = drawDashes;
-  const stitchDashes = useMemo(() => scaledDashes.filter((d) => d.kind !== 'jump'), [scaledDashes]);
+  const stitchDashes = useMemo(
+    () => scaledDashes.filter((d) => d.kind !== 'jump' && d.kind !== 'stop'),
+    [scaledDashes]
+  );
   const jumpDashes = useMemo(() => scaledDashes.filter((d) => d.kind === 'jump'), [scaledDashes]);
+  // Real machine pauses (PUFF_3D/APPLIQUE regions) -- see
+  // stitchpro-backend's formats/dst/writer.py STOP handling. Rendered as
+  // a distinct marker (not a line, since these are zero-length) so a user
+  // can see exactly where their machine will stop for fabric/foam
+  // placement before they even export.
+  const stopDashes = useMemo(() => scaledDashes.filter((d) => d.kind === 'stop'), [scaledDashes]);
 
   const fullEmboss = stitchDashes.length <= EMBOSS_LAYER_CAP;
 
@@ -621,7 +639,10 @@ export function EmbossedStitchCanvas({
         xMm: picked.x2 / PX_PER_MM,
         yMm: picked.y2 / PX_PER_MM,
         colorIndex: picked.colorIndex,
-        colorHex: picked.kind === 'jump' ? null : palette[picked.colorIndex % Math.max(1, palette.length)] ?? null,
+        colorHex:
+          picked.kind === 'jump' || picked.kind === 'stop'
+            ? null
+            : palette[picked.colorIndex % Math.max(1, palette.length)] ?? null,
       });
     },
     [containerSize, scaledDashes, scaledAllDashes, total, palette, onSelectStitch, localToSvg, zoom, pan]
@@ -959,6 +980,40 @@ export function EmbossedStitchCanvas({
                 strokeLinecap="round"
               />
             ))}
+
+        {/* machine-pause markers -- real pyembroidery STOP commands
+            (PUFF_3D/APPLIQUE regions only). Drawn as an amber ring with a
+            pause glyph so it reads unmistakably as "the machine stops
+            here", distinct from the indigo tap-to-inspect selection ring
+            below. */}
+        {stopDashes.map((s, i) => (
+          <React.Fragment key={`stop-${i}`}>
+            <Circle
+              cx={s.x2}
+              cy={s.y2}
+              r={PX_PER_MM * 1.5}
+              fill="rgba(217,164,65,0.18)"
+              stroke="#D9A441"
+              strokeWidth={1.8}
+            />
+            <Rect
+              x={s.x2 - PX_PER_MM * 0.45}
+              y={s.y2 - PX_PER_MM * 0.55}
+              width={PX_PER_MM * 0.3}
+              height={PX_PER_MM * 1.1}
+              rx={PX_PER_MM * 0.1}
+              fill="#D9A441"
+            />
+            <Rect
+              x={s.x2 + PX_PER_MM * 0.15}
+              y={s.y2 - PX_PER_MM * 0.55}
+              width={PX_PER_MM * 0.3}
+              height={PX_PER_MM * 1.1}
+              rx={PX_PER_MM * 0.1}
+              fill="#D9A441"
+            />
+          </React.Fragment>
+        ))}
 
         {/* selection marker -- the tapped stitch/jump's end point */}
         {selectedDash && (

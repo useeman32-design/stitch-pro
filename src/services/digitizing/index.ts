@@ -28,6 +28,10 @@ export interface StitchPlanSummary {
   threadChanges: number;
   jumps: number;
   trims: number;
+  /** Real machine pauses (pyembroidery STOP commands), only ever present
+   * for server-digitized PUFF_3D/APPLIQUE regions -- optional since the
+   * placeholder/legacy estimate paths below never produce any. */
+  stops?: number;
   sizeMm: { width: number; height: number };
 }
 

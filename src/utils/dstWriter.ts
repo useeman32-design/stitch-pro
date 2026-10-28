@@ -21,7 +21,7 @@
  * up-positive Y axis — callers never need to think about that.
  */
 
-export type DstCommand = 'stitch' | 'jump' | 'colorChange' | 'end';
+export type DstCommand = 'stitch' | 'jump' | 'colorChange' | 'stop' | 'end';
 
 export interface DstPoint {
   /** Absolute X position in 0.1mm units, screen-style (+right). */
@@ -30,6 +30,14 @@ export interface DstPoint {
   y: number;
   command: DstCommand;
 }
+
+// 'stop' is a real machine pause (used for PUFF_3D/APPLIQUE regions that
+// need the operator to place foam/fabric and trim before the machine
+// continues). At the raw DST byte level STOP and COLOR_CHANGE are the
+// identical 3-byte command (see pyembroidery's own DstWriter, cross-
+// checked during development) -- what makes it read as "a stop" rather
+// than a genuine thread change is simply that no new thread/color is
+// registered for it, exactly mirroring the backend's `formats/dst/writer.py`.
 
 export interface DstMeta {
   /** Design label, max 16 chars (Tajima header convention). */
@@ -149,7 +157,7 @@ function encodeRecord(dx: number, dy: number, command: DstCommand): [number, num
     if (y !== 0) {
       throw new Error(`DST encode: dy out of range (residual ${y}); split moves before encoding.`);
     }
-  } else if (command === 'colorChange') {
+  } else if (command === 'colorChange' || command === 'stop') {
     b2 = 0b11000011;
   } else if (command === 'end') {
     b2 = 0b11110011;
@@ -168,7 +176,7 @@ function splitLongMoves(points: DstPoint[]): DstPoint[] {
   let cx = 0;
   let cy = 0;
   for (const p of points) {
-    if (p.command === 'colorChange' || p.command === 'end') {
+    if (p.command === 'colorChange' || p.command === 'stop' || p.command === 'end') {
       out.push(p);
       cx = p.x;
       cy = p.y;

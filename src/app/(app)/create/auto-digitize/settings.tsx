@@ -175,6 +175,7 @@ export default function DesignSettingsScreen() {
           threadChanges: summary.threadChanges,
           jumps: summary.jumps,
           trims: summary.trims,
+          stops: summary.stops,
           sizeMm: summary.sizeMm,
         });
         setDstPoints(summary.points);
@@ -206,6 +207,7 @@ export default function DesignSettingsScreen() {
         threadChanges: real.threadChanges,
         jumps: real.jumps,
         trims: real.trims,
+        stops: real.stops,
         sizeMm: real.sizeMm,
       });
       setDstPoints(real.points);

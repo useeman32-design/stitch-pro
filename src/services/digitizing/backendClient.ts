@@ -131,7 +131,15 @@ export async function isBackendReachable(): Promise<boolean> {
  * the flat point stream. Sorted by the backend in descending stitch-count
  * order. */
 export interface StitchTypeBreakdownEntry {
-  type: 'RUNNING' | 'SATIN' | 'FILL' | 'CROSS_STITCH';
+  type:
+    | 'RUNNING'
+    | 'SATIN'
+    | 'FILL'
+    | 'CROSS_STITCH'
+    | 'BEAN'
+    | 'MOTIF'
+    | 'PUFF_3D'
+    | 'APPLIQUE';
   objectCount: number;
   stitchCount: number;
 }
