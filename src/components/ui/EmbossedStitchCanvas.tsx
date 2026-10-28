@@ -8,7 +8,7 @@ import {
   type GestureResponderEvent,
   type LayoutChangeEvent,
 } from 'react-native';
-import Svg, { Circle, Defs, Line, LinearGradient, Rect, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, Line, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
 import Animated, { useAnimatedProps, useSharedValue, withRepeat, withTiming, Easing } from 'react-native-reanimated';
 import { Maximize2, Minus, Plus } from 'lucide-react-native';
 import { colors as themeColors, radius } from '@/theme';
@@ -105,9 +105,23 @@ const ZOOM_BUTTON_STEP = 1.6;
 const TAP_MOVE_THRESHOLD_PX = 8;
 const DOUBLE_TAP_MS = 320;
 
+// Beyond this zoom level, two extra "close-up" cues switch on for
+// whichever dashes are actually inside the current pan/zoom window (see
+// `detailDashes` below -- real viewport culling, not a design-size cap,
+// so this works the same for a tiny monogram and a dense multi-thousand-
+// stitch patch): a diagonal ply-twist hatch across each stitch's width,
+// and a small dark "fabric puncture" dot where the needle actually went
+// through -- the two details that make a *zoomed-in* real embroidery
+// photo (or a Wilcom-style close-up render) read as individually
+// twisted, knotted strands of thread sitting on fabric, rather than a
+// shaded ribbon. Left off below this zoom because at a whole-design view
+// they'd just be visual noise, not a real, readable texture.
+const ZOOM_DETAIL_THRESHOLD = 2.2;
+
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
+
 
 function clamp255(v: number): number {
   return Math.max(0, Math.min(255, v));
@@ -138,6 +152,48 @@ function darken(hex: string, amt: number): string {
   const [r, g, b] = hexToRgb(hex);
   return rgbToHex(r * (1 - amt), g * (1 - amt), b * (1 - amt));
 }
+
+/** Cheap, seed-stable pseudo-random value in [-1, 1] (classic sine hash).
+ * Seeded on a dash's own *geometry* (its endpoint position), never on its
+ * array index -- so a given stitch always bows the same way no matter
+ * how much of the design around it has been decimated/progressively
+ * revealed this frame, and the same design always renders identically
+ * between sessions. */
+function stableJitter(seed: number): number {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return (x - Math.floor(x)) * 2 - 1;
+}
+
+/** Builds an SVG path "d" for a gently bowed (not perfectly straight)
+ * quadratic curve between two points, offset sideways by `offset` along
+ * the dash's own perpendicular (nx, ny), with an extra `bow` added only
+ * at the curve's control point. This is the single biggest cue that turns
+ * "a shaded ribbon" into "an actual strand of thread": real thread --
+ * even over one short ~2.6mm stitch -- never lies in a geometrically
+ * perfect straight line, it has a slight organic, twisted waviness. Used
+ * for all three emboss passes (shadow/body/sheen) of the same dash with
+ * the same `bow` but each pass's own lateral `offset`, so they read as
+ * one single bowed strand of thread seen from slightly different angles,
+ * not three unrelated lines. */
+function bowedPathD(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  nx: number,
+  ny: number,
+  bow: number,
+  offset: number
+): string {
+  const ox1 = x1 + nx * offset;
+  const oy1 = y1 + ny * offset;
+  const ox2 = x2 + nx * offset;
+  const oy2 = y2 + ny * offset;
+  const cx = (x1 + x2) / 2 + nx * (bow + offset);
+  const cy = (y1 + y2) / 2 + ny * (bow + offset);
+  return `M ${ox1} ${oy1} Q ${cx} ${cy} ${ox2} ${oy2}`;
+}
+
 
 interface Dash extends MmSegment {
   /** Unit vector perpendicular to this dash's own direction -- used to
@@ -262,19 +318,38 @@ type DragState = {
  *      small gap between each (`subdivideIntoDashes`) -- real embroidery
  *      is visibly made of individual stitches, and a long unbroken stroke
  *      reads as "a line" no matter how it's shaded.
- *   2. Each dash gets a soft, dark shadow stroke offset *across its own
+ *   2. Each dash is drawn as a gentle quadratic curve, not a perfectly
+ *      straight segment (`bowedPathD`) -- real thread, even over one
+ *      short ~2.6mm stitch, has its own slight organic bow/twist rather
+ *      than a geometrically perfect line; the bow is seeded from the
+ *      dash's own position so it's stable (same design always looks the
+ *      same) without ever being uniform/repeating.
+ *   3. Each dash gets a soft, dark shadow stroke offset *across its own
  *      width* (perpendicular to that dash's direction, not a fixed page
  *      diagonal) -- what reads as "this sits above the fabric surface,
  *      catching light on one rounded edge and casting a shadow on the
  *      other", consistently with the stitch's own orientation the way a
  *      satin row's ridges actually follow the stitch direction.
- *   3. The real thread-colored dash itself, filled with a linear gradient
+ *   4. The real thread-colored dash itself, filled with a linear gradient
  *      from a lightened tint through the base color to a darkened shade --
  *      simulating a single light source catching the rounded cross-section
  *      of a strand of thread.
- *   4. A thin, semi-transparent white "sheen" stroke offset the opposite
+ *   5. A thin, semi-transparent white "sheen" stroke offset the opposite
  *      way across the dash's width -- the glossy highlight real thread
  *      shows along its lit edge.
+ *   6. Once genuinely zoomed in (see `ZOOM_DETAIL_THRESHOLD`), two more
+ *      cues switch on for whichever dashes are actually inside the
+ *      current pan/zoom window (`detailDashes` -- real viewport culling,
+ *      not a design-size cap, so this works the same for a 50-stitch
+ *      monogram and a 26,000-stitch patch): a short diagonal "ply-twist"
+ *      hatch across each dash's width (alternating tilt stitch-to-stitch,
+ *      mimicking how a real twisted thread's individual filaments visibly
+ *      cross over each other), and a tiny dark dot at its end point
+ *      marking where the needle actually punched through the fabric --
+ *      together the closest this 2D render gets to a Wilcom-style
+ *      close-up simulate view, where stitching reads as individually
+ *      knotted/textured strands sitting on cloth, not a smooth drawn
+ *      ribbon.
  *
  * Jumps (needle travel with no thread laid down) render as a thin, flat,
  * dashed gray line instead -- visually distinct from real thread on sight,
@@ -558,12 +633,55 @@ export function EmbossedStitchCanvas({
     : realisticStrokeW;
   const shadowOffset = strokeW * 0.42;
   const highlightOffset = strokeW * 0.24;
+  // How far each dash's quadratic control point bows sideways off a
+  // perfectly straight line -- large enough to read as "this strand has
+  // its own organic shape" at the zoom level a user would actually
+  // inspect individual stitches at, small enough that it never distorts
+  // the design's real geometry or reads as jagged at a whole-design view.
+  const bowMagnitude = strokeW * 0.55;
+  const bowFor = useCallback(
+    (s: Pick<Dash, 'x1' | 'y1'>) => stableJitter(s.x1 * 0.6131 + s.y1 * 0.7919) * bowMagnitude,
+    [bowMagnitude]
+  );
   const letterboxX = (containerSize.width - renderedW) / 2;
   const letterboxY = (containerSize.height - renderedH) / 2;
 
   const visibleW = viewW / zoom;
   const visibleH = viewH / zoom;
   const effectiveViewBox = `${pan.x} ${pan.y} ${visibleW} ${visibleH}`;
+
+  // See `ZOOM_DETAIL_THRESHOLD` -- the extra ply-twist/fabric-puncture
+  // passes only switch on once the user has actually zoomed in close
+  // enough for them to read as real texture rather than noise. Unlike the
+  // shadow/sheen emboss passes above, this is deliberately NOT gated by
+  // the design's total stitch count (`fullEmboss`): a real design can
+  // easily carry tens of thousands of stitches (a small patch is routinely
+  // 20,000+), and gating on the total would mean these details simply
+  // never appear for almost any real design, exactly the thing this
+  // feature exists to improve. Instead, this filters down to only the
+  // dashes actually inside the current pan/zoom window (plus a small
+  // margin so dashes don't visibly pop in/out right at the window's
+  // edge while panning) -- real viewport culling, so the extra element
+  // count stays naturally small (bounded by how much of the design is
+  // actually on screen at this zoom) regardless of the design's overall
+  // size, the same reason a user only cares about this texture on
+  // whatever small patch they're currently looking at up close.
+  const detailDashes = useMemo(() => {
+    if (zoom < ZOOM_DETAIL_THRESHOLD) return [];
+    const marginX = visibleW * 0.15;
+    const marginY = visibleH * 0.15;
+    const minX = pan.x - marginX;
+    const maxX = pan.x + visibleW + marginX;
+    const minY = pan.y - marginY;
+    const maxY = pan.y + visibleH + marginY;
+    return stitchDashes.filter((d) => {
+      const dMinX = Math.min(d.x1, d.x2);
+      const dMaxX = Math.max(d.x1, d.x2);
+      const dMinY = Math.min(d.y1, d.y2);
+      const dMaxY = Math.max(d.y1, d.y2);
+      return dMaxX >= minX && dMinX <= maxX && dMaxY >= minY && dMinY <= maxY;
+    });
+  }, [zoom, pan, visibleW, visibleH, stitchDashes]);
 
   const clampPan = useCallback(
     (p: PanState, z: number): PanState => {
@@ -970,30 +1088,34 @@ export function EmbossedStitchCanvas({
         ))}
 
         {/* shadow pass -- gives each dash its raised/embossed look, offset
-            across its OWN width rather than a fixed page diagonal */}
+            across its OWN width rather than a fixed page diagonal. Follows
+            the same gentle bow as the body/sheen passes below (see
+            `bowedPathD`) so all three read as one single curved strand of
+            thread, not three straight lines stacked on each other. */}
         {!fullEmboss
           ? null
           : stitchDashes.map((s, i) => (
-              <Line
+              <Path
                 key={`shadow-${i}`}
-                x1={s.x1 + s.nx * shadowOffset}
-                y1={s.y1 + s.ny * shadowOffset}
-                x2={s.x2 + s.nx * shadowOffset}
-                y2={s.y2 + s.ny * shadowOffset}
+                d={bowedPathD(s.x1, s.y1, s.x2, s.y2, s.nx, s.ny, bowFor(s), shadowOffset)}
+                fill="none"
                 stroke="rgba(10,10,20,0.3)"
                 strokeWidth={strokeW * 1.1}
                 strokeLinecap="round"
               />
             ))}
 
-        {/* main thread-colored pass -- one dash per stitch */}
+        {/* main thread-colored pass -- one dash per stitch, gently bowed
+            (never a perfectly straight line) so even a single ~2.6mm
+            stitch reads as an organic strand of thread rather than a
+            ruled line -- the core "knot realism" cue this pass carries on
+            its own even for dense designs where the shadow/sheen passes
+            above are skipped for performance. */}
         {stitchDashes.map((s, i) => (
-          <Line
+          <Path
             key={`body-${i}`}
-            x1={s.x1}
-            y1={s.y1}
-            x2={s.x2}
-            y2={s.y2}
+            d={bowedPathD(s.x1, s.y1, s.x2, s.y2, s.nx, s.ny, bowFor(s), 0)}
+            fill="none"
             stroke={`url(#thread-grad-${s.colorIndex % Math.max(1, palette.length)})`}
             strokeWidth={strokeW}
             strokeLinecap="round"
@@ -1004,17 +1126,66 @@ export function EmbossedStitchCanvas({
         {!fullEmboss
           ? null
           : stitchDashes.map((s, i) => (
-              <Line
+              <Path
                 key={`sheen-${i}`}
-                x1={s.x1 - s.nx * highlightOffset}
-                y1={s.y1 - s.ny * highlightOffset}
-                x2={s.x2 - s.nx * highlightOffset}
-                y2={s.y2 - s.ny * highlightOffset}
+                d={bowedPathD(s.x1, s.y1, s.x2, s.y2, s.nx, s.ny, bowFor(s), -highlightOffset)}
+                fill="none"
                 stroke="rgba(255,255,255,0.42)"
                 strokeWidth={Math.max(0.6, strokeW * 0.3)}
                 strokeLinecap="round"
               />
             ))}
+
+        {/* ply-twist hatch -- a short diagonal tick across each stitch's
+            own width, alternating tilt direction stitch-to-stitch, the way
+            a real twisted 2- or 3-ply thread's individual filaments
+            visibly cross over each other along its length. Only drawn for
+            `detailDashes` (see above) -- i.e. once genuinely zoomed in,
+            and only for the small, viewport-bounded slice of the design
+            actually on screen -- at a whole-design view, or for the
+            99%+ of a large design currently off-screen, this would just
+            be wasted/invisible work. Tilt sign is seeded from the dash's
+            own position (not its index in this filtered list), so it
+            can't flip as panning changes which neighboring dashes are
+            also in view. */}
+        {detailDashes.map((s, i) => {
+          const ux = s.ny;
+          const uy = -s.nx;
+          const mx = (s.x1 + s.x2) / 2;
+          const my = (s.y1 + s.y2) / 2;
+          const tickHalf = strokeW * 0.46;
+          const tiltSign = stableJitter(s.x1 * 0.233 + s.y1 * 0.311) >= 0 ? 1 : -1;
+          const tilt = strokeW * 0.32 * tiltSign;
+          return (
+            <Line
+              key={`twist-${i}`}
+              x1={mx + s.nx * tickHalf + ux * tilt}
+              y1={my + s.ny * tickHalf + uy * tilt}
+              x2={mx - s.nx * tickHalf - ux * tilt}
+              y2={my - s.ny * tickHalf - uy * tilt}
+              stroke="rgba(0,0,0,0.22)"
+              strokeWidth={Math.max(0.35, strokeW * 0.12)}
+              strokeLinecap="round"
+            />
+          );
+        })}
+
+        {/* fabric-puncture dots -- a tiny dark mark at each stitch's end
+            point, where the needle actually punches through the fabric.
+            Real close-up embroidery photos (and Wilcom's own simulate
+            view) show this at every stitch; it's the detail that most
+            reads as "sitting on cloth" rather than "drawn on top of it".
+            Same viewport-culled `detailDashes` list as the ply-twist
+            hatch above. */}
+        {detailDashes.map((s, i) => (
+          <Circle
+            key={`pinch-${i}`}
+            cx={s.x2}
+            cy={s.y2}
+            r={Math.max(0.3, strokeW * 0.16)}
+            fill="rgba(20,16,10,0.38)"
+          />
+        ))}
 
         {/* machine-pause markers -- real pyembroidery STOP commands
             (PUFF_3D/APPLIQUE regions only). Drawn as an amber ring with a
