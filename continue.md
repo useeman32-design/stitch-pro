@@ -1081,3 +1081,107 @@ RAM, no swap) -- keep live-browser checks lean and re-check
    230/230+), `cd stitch-pro && npx tsc --noEmit` (expect clean), `node
    scripts/test-merge-*.mjs` for each (expect all green), `npx expo export
    -p web` (expect no errors), then a live-browser smoke check per §4.
+
+---
+
+## Session: Region editor gains Redraw + Add Shape (`stitch-pro@d324b66`)
+
+The user re-confirmed a 5-item backlog this session (vectorization, bg-removal
+brush, full region editor, photo-of-real-embroidery extraction, knot-realism
+preview) and asked to "carry on what's left". Items 1 (real vectorization)
+and 2 (bg-removal brush) were already complete. Item 3 (**full region
+editor** — select/delete/redraw/add) had select+delete already done; this
+session added the missing **redraw** and **add-shape** pieces, so item 3 is
+now fully done too. Items 4 and 5 are still not started — pick those up
+next (4 before 5, per the user's standing "fold in the cosmetic one last"
+preference).
+
+**What shipped** (`src/utils/polygonGeometry.ts` + rewritten
+`VectorRegionEditor.tsx` + `vectorize.tsx` wiring):
+- `polygonGeometry.ts`: pure, dependency-free RDP polyline simplification,
+  live-drag point decimation, and shoelace polygon-area helpers. Unit
+  tested via `node scripts/test-polygon-geometry.mjs` (10/10 passing).
+- Select a region on the Vectorize & Edit screen -> its footer card now
+  also shows a **Redraw** button alongside the existing Delete. Tapping it
+  enters draw mode; a freehand mouse/touch drag on the stage replaces that
+  region's outer ring with the new shape (same color kept; any holes in
+  the original region are dropped — a known, documented tradeoff for this
+  first version, not a bug).
+- **Add Shape** button (next to the region-count label): if the design
+  already uses more than one color, a small swatch row appears first to
+  pick the new shape's color; otherwise it reuses the single existing
+  color automatically. Then a freehand drag adds a brand-new region.
+- Screen-to-mm coordinate mapping correctly accounts for the stage Svg's
+  `viewBox` + `preserveAspectRatio="xMidYMid meet"` scale/letterbox offset,
+  so drawing lines up with the artwork regardless of aspect ratio.
+
+**Verification performed (live, not just lint/typecheck):**
+- `npx tsc --noEmit` clean, `npx eslint` clean on both touched/new files
+  (the only findings are 4 pre-existing issues in `vectorize.tsx`,
+  confirmed via `git stash` diff to predate this session).
+- **Live Playwright run against the real local backend**, using the
+  low-memory pattern below (not the dev server — see the new environment
+  note). Uploaded the bundled lion-logo sample through the real
+  background-removal + vectorize backend calls (350 real traced regions,
+  a heavily fragmented "photo-like" result consistent with this asset's
+  known classification — not a regression), then drove the UI directly:
+  select -> region card appears with Redraw/Delete; **Redraw** -> freehand
+  drag replaces the selected region (350 -> 350 regions, area/position
+  updated, color preserved); **Add Shape** -> color swatch picker ->
+  freehand drag adds a new region (350 -> 351); **Delete** -> removes the
+  selected region (350 -> 349). Zero console/page errors through all of
+  it. Pushed to `main` (`d324b66`) and redeployed to GitHub Pages;
+  confirmed live at `https://useeman32-design.github.io/stitch-pro/` (home
+  screen + `/create/auto-digitize/` both load with no "Unmatched Route"
+  and no console errors).
+
+**New environment note — do not run the Metro dev server and Playwright's
+Chromium at the same time in this sandbox.** It has 1.9GB RAM and no swap;
+`expo start --web` plus a headless Chromium instance reliably OOM-kills
+Metro (`exit_code 137`) within a minute or two of real bundling/interaction
+load. The proven low-memory alternative for any future Playwright/E2E
+check of this frontend:
+```bash
+cd stitch-pro && rm -rf dist && npx expo export -p web   # one-shot, exits cleanly
+mkdir -p /tmp/pages_root/stitch-pro && cp -r dist/* /tmp/pages_root/stitch-pro/
+# serve with a trivial, near-zero-memory static server instead of Metro:
+python3 -m http.server 8090 --directory /tmp/pages_root &
+# then point Playwright at http://localhost:8090/stitch-pro/...
+```
+(The `/stitch-pro/` subpath mirrors this repo's GH-Pages basePath so
+in-app relative links/assets resolve the same way they do in production.)
+Before driving the flow, also set
+`localStorage.stitchpro_backend_url = 'http://localhost:5050'` and reload,
+so the exported static build talks to the live local Flask backend instead
+of its disabled-by-default production URL.
+
+**RN-web Playwright click quirk found this session (will likely recur on
+any future RN-web/Expo-web Playwright work in this app):** some
+`Pressable`-driven buttons (e.g. the wizard's "Continue to Vectorize")
+don't reliably respond to Playwright's synthetic `locator.click()` or a
+real `mouse.down()`/`mouse.up()` pair — the click lands but no navigation
+fires, with no console error either. A direct JS DOM dispatch does work
+reliably:
+```python
+el = await page.locator("text=Continue to Vectorize").first.element_handle()
+await page.evaluate("(el) => el.click()", el)
+```
+Use this pattern (wrapped in a small retry loop, since it can still
+occasionally need a second attempt) for any button click in this app
+going forward rather than relying on Playwright's built-in click. Plain
+raw mouse `down`/`move`/`up` drag sequences (used for the freehand
+draw-to-redraw/add-shape gesture above) work fine and did **not** need
+this workaround — the quirk seems specific to RN-web's Pressable/responder
+click handling, not to raw mouse events in general.
+
+Also re-confirmed from an earlier session's caution: RN-web frequently
+renders the same visible text in more than one DOM node, and a raw
+`page.locator("svg path")`/`"text=..."` selector can match the wrong
+element entirely (e.g. an unrelated sidebar icon's `<path>`, not the
+intended on-canvas shape) — always scope selectors to a specific
+container, or verify a match's `bounding_box()` actually falls inside the
+expected screen region, before clicking.
+
+Not touched this session: item 4 (photo-of-real-embroidery extraction,
+not started) and item 5 (knot-realism preview upgrade, not started,
+correctly deferred last per the user's own stated priority).
