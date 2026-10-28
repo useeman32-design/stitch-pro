@@ -14,6 +14,7 @@ import { WizardFooter } from '@/components/create/WizardFooter';
 import { useDigitizeWizard } from '@/contexts/DigitizeWizardContext';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useStitchPreview } from '@/hooks/useStitchPreview';
+import { useLetteringPreview } from '@/hooks/useLetteringPreview';
 import {
   DENSITY_CROSS_CELL_MM,
   DENSITY_FILL_SPACING_MM,
@@ -82,6 +83,7 @@ export default function DesignPreviewScreen() {
     stitchPlan,
     threadColors,
     removeBackground,
+    letterMeta,
     updateSettings,
     setStitchPlan,
     setDstPoints,
@@ -125,8 +127,15 @@ export default function DesignPreviewScreen() {
   // canvas-filtered copy of the source image composited onto a hoop/fabric
   // mockup photo like this screen used to show. Re-runs automatically
   // whenever `debouncedDensityPercent` settles on a new value.
+  // A design built from the dedicated lettering engine (see create/text.tsx
+  // and useLetteringPreview) carries its own exact text/color and re-runs
+  // through that same satin-column engine here -- reusing `settings.heightMm`
+  // as the letters' cap height (the natural mapping of this screen's existing
+  // size field for a text design) and the live density slider as the satin
+  // crossing spacing, exactly like every other design type's density control.
+  const lettering = useLetteringPreview(letterMeta ? letterMeta.text : null, settings.heightMm, letterMeta?.color ?? '#111111', liveDensityMm);
   const sim = useStitchPreview(
-    artwork ? { uri: artwork.uri } : null,
+    !letterMeta && artwork ? { uri: artwork.uri } : null,
     settings.widthMm,
     settings.heightMm,
     threadColors.length || 6,
@@ -137,6 +146,10 @@ export default function DesignPreviewScreen() {
     liveStitchLengthMm,
     liveBorderWidthMm
   );
+  // From here on, `activeSim` is what the rest of this screen renders from
+  // and syncs into the wizard context -- identical shape either way, so
+  // nothing below needs to know which engine actually produced it.
+  const activeSim = letterMeta ? lettering : sim;
 
   // Keep the wizard's own stitchPlan/dstPoints/threadColors (what the
   // Stats card shows, and what Finish & Download actually exports) in sync
@@ -145,8 +158,8 @@ export default function DesignPreviewScreen() {
   // screen, and the downloaded file would silently ignore it and use
   // whatever density was set back on the Settings screen.
   useEffect(() => {
-    if (sim.source !== 'backend' || !sim.dstPoints) return;
-    const summary = summarizePoints(sim.dstPoints, sim.widthMm, sim.heightMm);
+    if (activeSim.source !== 'backend' || !activeSim.dstPoints) return;
+    const summary = summarizePoints(activeSim.dstPoints, activeSim.widthMm, activeSim.heightMm);
     setStitchPlan({
       stitches: summary.stitches,
       colors: summary.colors,
@@ -158,12 +171,12 @@ export default function DesignPreviewScreen() {
       sizeMm: summary.sizeMm,
     });
     setDstPoints(summary.points);
-    if (sim.palette.length) setThreadColors(sim.palette);
+    if (activeSim.palette.length) setThreadColors(activeSim.palette);
     if (debouncedDensityPercent !== settings.densityPercent) {
       updateSettings({ densityPercent: debouncedDensityPercent });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sim.dstPoints, sim.source]);
+  }, [activeSim.dstPoints, activeSim.source]);
 
   // Only the very first load (no segments rendered yet) should show the
   // big "Rendering stitched preview..." takeover box. `useStitchPreview`
@@ -174,8 +187,8 @@ export default function DesignPreviewScreen() {
   // needed -- and shown as a small non-blocking "Updating density..." pill
   // over the still-visible last-good design instead. A slider that blanks
   // the whole canvas on every drag would feel broken, not live.
-  const showFullscreenLoader = sim.loading && sim.segments.length === 0;
-  const showUpdatingHint = sim.loading && sim.segments.length > 0;
+  const showFullscreenLoader = activeSim.loading && activeSim.segments.length === 0;
+  const showUpdatingHint = activeSim.loading && activeSim.segments.length > 0;
 
   if (!artwork || !stitchPlan) return null;
 
@@ -199,7 +212,7 @@ export default function DesignPreviewScreen() {
                   Rendering stitched preview…
                 </Text>
               </View>
-            ) : sim.source === 'none' ? (
+            ) : activeSim.source === 'none' ? (
               <View style={styles.loadingBox}>
                 <Text style={[typography.bodySmall, styles.noPreviewText]}>
                   Couldn&apos;t reach the digitizing backend to build a stitch preview for this design.
@@ -208,10 +221,10 @@ export default function DesignPreviewScreen() {
             ) : (
               <>
                 <EmbossedStitchCanvas
-                  segments={sim.segments}
-                  palette={sim.palette}
-                  widthMm={sim.widthMm}
-                  heightMm={sim.heightMm}
+                  segments={activeSim.segments}
+                  palette={activeSim.palette}
+                  widthMm={activeSim.widthMm}
+                  heightMm={activeSim.heightMm}
                   progress={1}
                   threadThicknessScale={threadThicknessScale}
                 />
@@ -285,7 +298,7 @@ export default function DesignPreviewScreen() {
             </View>
           </Card>
 
-          {sim.stitchTypeBreakdown.length > 0 && (
+          {activeSim.stitchTypeBreakdown.length > 0 && (
             <Card style={{ marginTop: spacing.md }}>
               <Text style={[typography.h3, { marginBottom: spacing.xs }]}>Stitch Types</Text>
               <Text style={[typography.bodySmall, styles.densityHint]}>
@@ -294,7 +307,7 @@ export default function DesignPreviewScreen() {
                 an efficient fill, and bold solid shapes may become 3D puff or appliqué.
               </Text>
               <View style={styles.badgeGrid}>
-                {sim.stitchTypeBreakdown.map((entry) => (
+                {activeSim.stitchTypeBreakdown.map((entry) => (
                   <Badge
                     key={entry.type}
                     label={`${STITCH_TYPE_LABELS[entry.type] ?? entry.type} · ${entry.objectCount} region${
@@ -304,7 +317,7 @@ export default function DesignPreviewScreen() {
                   />
                 ))}
               </View>
-              {sim.stitchTypeBreakdown.some((entry) => STITCH_TYPES_REQUIRING_PAUSE.has(entry.type)) && (
+              {activeSim.stitchTypeBreakdown.some((entry) => STITCH_TYPES_REQUIRING_PAUSE.has(entry.type)) && (
                 <Text style={[typography.bodySmall, styles.densityHint, { marginTop: spacing.sm }]}>
                   ⚠ This design includes 3D Puff or Appliqué regions — your embroidery machine will pause
                   mid-stitch so you can place foam or fabric and trim before it continues.

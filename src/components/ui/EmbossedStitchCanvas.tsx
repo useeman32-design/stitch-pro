@@ -498,18 +498,6 @@ export function EmbossedStitchCanvas({
 
   const fullEmboss = stitchDashes.length <= EMBOSS_LAYER_CAP;
 
-  // Thread width is tied to a physically-accurate real-world diameter
-  // (~0.22mm, a typical embroidery thread) rather than scaling with
-  // design size -- PX_PER_MM is a fixed mm<->view-space ratio, so this is
-  // already "to scale" for any design. `threadThicknessScale` is the only
-  // thing that moves it now, letting a user see a heavier/lighter thread
-  // without that being confused for a change in the actual digitized
-  // geometry.
-  const thicknessScale = clamp(threadThicknessScale, 0.4, 2.5);
-  const strokeW = Math.max(1.6, Math.min(3.2, PX_PER_MM * 0.22)) * thicknessScale;
-  const shadowOffset = strokeW * 0.42;
-  const highlightOffset = strokeW * 0.24;
-
   // --- Pan/zoom geometry -----------------------------------------------
   // Zooming is implemented as a variable SVG viewBox window rather than a
   // CSS/Animated transform: the <Svg> element's own on-screen rendered
@@ -523,6 +511,34 @@ export function EmbossedStitchCanvas({
     : 0;
   const renderedW = viewW * baseScale;
   const renderedH = viewH * baseScale;
+
+  // Thread width is tied to a physically-accurate real-world diameter
+  // (~0.22mm, a typical embroidery thread) rather than scaling with
+  // design size -- PX_PER_MM is a fixed mm<->view-space ratio, so this is
+  // already "to scale" for any design. `threadThicknessScale` is the only
+  // thing that moves it now, letting a user see a heavier/lighter thread
+  // without that being confused for a change in the actual digitized
+  // geometry.
+  const thicknessScale = clamp(threadThicknessScale, 0.4, 2.5);
+  const realisticStrokeW = Math.max(1.6, Math.min(3.2, PX_PER_MM * 0.22)) * thicknessScale;
+  // A design whose own mm size is much bigger than the preview stage --
+  // a long multi-word lettering/monogram line is the real case this
+  // shows up for, easily 10x wider than a typical logo -- can get fit
+  // ("1x = whole design visible") to a scale so small that a
+  // physically-accurate ~0.2mm thread becomes a sub-pixel line and
+  // disappears entirely under antialiasing, even though its geometry is
+  // perfectly correct. Floor the on-screen stroke width at a small
+  // minimum (in actual screen pixels, accounting for the current zoom
+  // too, not just the base fit) so the design is always at least
+  // visible; this only ever makes already-thin strokes thicker, so it's
+  // a no-op for every design that already renders at a sane scale.
+  const effectiveScale = baseScale * zoom;
+  const MIN_ONSCREEN_STROKE_PX = 1;
+  const strokeW = effectiveScale > 0 && realisticStrokeW * effectiveScale < MIN_ONSCREEN_STROKE_PX
+    ? MIN_ONSCREEN_STROKE_PX / effectiveScale
+    : realisticStrokeW;
+  const shadowOffset = strokeW * 0.42;
+  const highlightOffset = strokeW * 0.24;
   const letterboxX = (containerSize.width - renderedW) / 2;
   const letterboxY = (containerSize.height - renderedH) / 2;
 

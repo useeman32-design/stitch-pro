@@ -33,6 +33,20 @@ interface DigitizeWizardValue {
    * call fires. */
   removeBackground: boolean;
   setRemoveBackground: (value: boolean) => void;
+  /** Set only when this design came from create/text.tsx AND the typed
+   * text/font/layout combination is fully supported by the backend's
+   * dedicated lettering engine (digitizer/lettering) -- see that
+   * screen's `isLetteringEligible` check. When present, the rest of the
+   * wizard (analyzing/preview/success) uses the real satin-column
+   * lettering engine instead of the generic image-based auto-digitizer
+   * for every re-digitize call, so curved letters (O/S/C/G/...) come out
+   * as clean satin columns instead of whatever the generic per-region
+   * classifier would land on for a rasterized text image. `null` for
+   * every other design (image upload, monogram, unsupported text/font/
+   * layout combination), which keeps the existing image-based path
+   * completely unchanged. */
+  letterMeta: { text: string; color: string } | null;
+  setLetterMeta: (meta: { text: string; color: string } | null) => void;
   setArtwork: (artwork: UploadedArtwork) => void;
   clearArtwork: () => void;
   setAnalysis: (analysis: AnalysisResult) => void;
@@ -56,6 +70,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
   const [removeBackground, setRemoveBackgroundState] = useState(true);
   const [stitchPlan, setStitchPlanState] = useState<StitchPlanSummary | null>(null);
   const [dstPoints, setDstPointsState] = useState<DstPoint[] | null>(null);
+  const [letterMeta, setLetterMetaState] = useState<{ text: string; color: string } | null>(null);
 
   const updateSettings = useCallback((partial: Partial<DigitizeSettings>) => {
     setSettings((prev) => {
@@ -92,6 +107,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
     setStitchPlanState(null);
     setDstPointsState(null);
     setRemoveBackgroundState(true);
+    setLetterMetaState(null);
   }, []);
 
   const value = useMemo(
@@ -104,8 +120,13 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       dstPoints,
       removeBackground,
       setRemoveBackground: setRemoveBackgroundState,
+      letterMeta,
+      setLetterMeta: setLetterMetaState,
       setArtwork: setArtworkState,
-      clearArtwork: () => setArtworkState(null),
+      clearArtwork: () => {
+        setArtworkState(null);
+        setLetterMetaState(null);
+      },
       setAnalysis,
       updateSettings,
       setThreadColors: setThreadColorsState,
@@ -124,6 +145,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       stitchPlan,
       dstPoints,
       removeBackground,
+      letterMeta,
       setAnalysis,
       updateSettings,
       addThreadColor,

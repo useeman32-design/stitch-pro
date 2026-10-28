@@ -101,6 +101,7 @@ export default function DesignSettingsScreen() {
     setStitchPlan,
     setDstPoints,
     removeBackground,
+    letterMeta,
   } = useDigitizeWizard();
   const [threads, setThreads] = useState<ThreadColor[]>([]);
   const [generating, setGenerating] = useState(false);
@@ -139,6 +140,33 @@ export default function DesignSettingsScreen() {
   };
 
   const handleGenerate = async () => {
+    // Lettering designs (Bold Block / Varsity, Straight layout) already
+    // have their real stitch data produced by the backend's dedicated
+    // lettering engine -- `preview.tsx` fetches it itself (via
+    // `useLetteringPreview`, keyed on `letterMeta`) and writes the
+    // resulting `stitchPlan`/`dstPoints`/`threadColors` the moment it
+    // resolves. Running the generic image-trace analysis here too would
+    // be wasted backend work and would briefly show the wrong (traced,
+    // not real-satin-lettered) stats on the next screen before being
+    // overwritten. Just hand off with a placeholder plan so the
+    // `!stitchPlan` guards on this screen and the next don't bounce the
+    // user back, and let the lettering engine take over immediately.
+    if (letterMeta) {
+      setStitchPlan({
+        stitches: 0,
+        colors: 1,
+        estimatedThreadMeters: 0,
+        estimatedTimeMinutes: 0,
+        threadChanges: 0,
+        jumps: 0,
+        trims: 0,
+        stops: 0,
+        sizeMm: { width: settings.widthMm, height: settings.heightMm },
+      });
+      setDstPoints([]);
+      router.push('/create/auto-digitize/preview');
+      return;
+    }
     setGenerating(true);
     try {
       // Real digitizing, preferred path: the actual stitchpro-backend

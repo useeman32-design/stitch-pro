@@ -25,7 +25,7 @@ const STEP_DURATION_MS = 620;
 
 export default function AnalyzingArtworkScreen() {
   const router = useRouter();
-  const { artwork, analysis, setAnalysis } = useDigitizeWizard();
+  const { artwork, analysis, setAnalysis, letterMeta } = useDigitizeWizard();
   const [stepIndex, setStepIndex] = useState(0);
   const [done, setDone] = useState(false);
   const startedRef = useRef(false);
@@ -46,7 +46,25 @@ export default function AnalyzingArtworkScreen() {
         setTimeout(() => advance(index + 1), STEP_DURATION_MS);
       } else {
         setTimeout(async () => {
-          const result = await digitizingService.analyzeArtwork({ uri: artwork.uri });
+          // A design built with the dedicated lettering engine (see
+          // create/text.tsx) already knows exactly what it is -- one
+          // thread color, one SATIN-everything design -- so there's
+          // nothing for the generic pixel-based analyzer
+          // (digitizingService.analyzeArtwork) to usefully discover here;
+          // calling it on the flattened text image would just rediscover
+          // the same color via pixel-sampling and risk a worse read (e.g.
+          // mistaking anti-aliased edges for extra colors). Skip straight
+          // to a synthesized result instead.
+          const result = letterMeta
+            ? {
+                colorsDetected: 1,
+                objectsIdentified: letterMeta.text.replace(/\s/g, '').length,
+                background: 'Transparent' as const,
+                recommendedStitchTypes: ['Satin'],
+                dominantColors: [letterMeta.color],
+                complexity: 0.3,
+              }
+            : await digitizingService.analyzeArtwork({ uri: artwork.uri });
           if (!cancelled) {
             setAnalysis(result);
             setDone(true);
@@ -59,6 +77,10 @@ export default function AnalyzingArtworkScreen() {
     return () => {
       cancelled = true;
     };
+    // Deliberately only re-runs when `artwork` changes (startedRef guards
+    // re-triggering within the same artwork); `letterMeta`/`setAnalysis`/
+    // `router` are read at call time and don't need to restart this sequence.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artwork]);
 
   const progress = done ? 1 : (stepIndex + 0.5) / ANALYSIS_STEPS.length;

@@ -331,3 +331,123 @@ export async function analyzeImageViaBackend(
   }
 }
 
+const TEXT_FETCH_TIMEOUT_MS = 8000;
+
+export interface AnalyzeTextOptions {
+  /** Cap height in mm (matches how embroidery lettering is normally
+   * quoted, e.g. "1 inch letters"). */
+  sizeMm: number;
+  /** Hex thread color for every letter (lettering is always single-color
+   * -- see stitchpro-backend's digitizer/lettering/engine.py). */
+  color: string;
+  /** Only "straight" is supported by the dedicated lettering engine so
+   * far -- see that module's docstring for why "Arc Up"/"Arc Down" aren't
+   * wired here yet. */
+  layout?: 'straight';
+  /** FILL/SATIN crossing spacing in mm, reusing the same live density
+   * slider every other design type already has. Omit for the engine's
+   * own default. */
+  densityMm?: number;
+}
+
+/**
+ * Asks the real backend's dedicated lettering engine
+ * (stitchpro-backend's digitizer/lettering) to build `text` as real
+ * satin-column letterforms and returns the result as the same `DstPoint`-
+ * shaped point-stream contract `analyzeImageViaBackend` above returns --
+ * so every existing point-based renderer/converter (EmbossedStitchCanvas,
+ * stitchPlanner summaries, the final DST/PES/etc export) keeps working
+ * completely unmodified, whether the design came from an image or typed
+ * text.
+ *
+ * Unlike the generic image pipeline, there's no client-side fallback for
+ * this -- lettering with correct satin columns genuinely requires the
+ * backend's glyph alphabet, there's no equivalent browser-canvas
+ * approximation worth building. Returns `null` on any failure (backend
+ * disabled/unreachable/timeout, or a character outside the dedicated
+ * alphabet) -- callers should fall back to the older render-text-to-image
+ * + generic-auto-digitize path in that case (see create/text.tsx).
+ */
+export async function textToPointsViaBackend(
+  text: string,
+  options: AnalyzeTextOptions
+): Promise<BackendPointsResult | null> {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl || !text.trim()) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TEXT_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${baseUrl}/api/design/text-to-points`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        size_mm: options.sizeMm,
+        color: options.color,
+        layout: options.layout ?? 'straight',
+        ...(options.densityMm !== undefined ? { density_mm: options.densityMm } : {}),
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!Array.isArray(data.points) || !data.points.length) return null;
+
+    return {
+      widthMm: data.width_mm,
+      heightMm: data.height_mm,
+      threads: data.threads ?? [],
+      points: data.points,
+      stitchTypeBreakdown: Array.isArray(data.stitchTypeBreakdown) ? data.stitchTypeBreakdown : [],
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Same dedicated lettering engine as `textToPointsViaBackend`, but asks
+ * the backend to encode the result directly as a real downloadable file
+ * (`POST /api/design/text-to-file`) -- mirrors `exportViaBackend`'s shape
+ * for the generic point-stream path. Returns `null` on any failure.
+ */
+export async function textToFileViaBackend(
+  text: string,
+  options: AnalyzeTextOptions,
+  format: BackendFormat,
+  name: string
+): Promise<Blob | null> {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl || !text.trim()) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TEXT_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${baseUrl}/api/design/text-to-file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        size_mm: options.sizeMm,
+        color: options.color,
+        layout: options.layout ?? 'straight',
+        ...(options.densityMm !== undefined ? { density_mm: options.densityMm } : {}),
+        format,
+        name: name.replace(/[^A-Za-z0-9-_]/g, '').slice(0, 32) || 'text-design',
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    return await response.blob();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+

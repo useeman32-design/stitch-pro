@@ -15,6 +15,7 @@ import { WizardFooter } from '@/components/create/WizardFooter';
 import { useResponsive } from '@/hooks/useResponsive';
 import { useDigitizeWizard } from '@/contexts/DigitizeWizardContext';
 import { useStitchPreview } from '@/hooks/useStitchPreview';
+import { useLetteringPreview } from '@/hooks/useLetteringPreview';
 import { renderTextArtwork, type TextFontStyle, type TextLayout } from '@/utils/designRenderers';
 
 // Live preview canvas size while the user is still editing text/font/color,
@@ -22,10 +23,21 @@ import { renderTextArtwork, type TextFontStyle, type TextLayout } from '@/utils/
 // be a reasonable wide-text aspect ratio, not the final production size.
 const LIVE_PREVIEW_WIDTH_MM = 100;
 const LIVE_PREVIEW_HEIGHT_MM = 54;
+// Cap height used for the dedicated lettering engine's live preview (see
+// useLetteringPreview) -- a fixed, reasonable preview size independent of
+// whatever final size the user picks later on the Settings screen.
+const LETTERING_PREVIEW_CAP_HEIGHT_MM = 16;
 // Debounce real backend digitizing calls while the user is actively typing
 // or dragging a color picker -- without this, every keystroke would fire
 // its own analyze-image request.
 const STITCH_PREVIEW_DEBOUNCE_MS = 450;
+// "Bold Block" and "Varsity" are both bold, straight-stroke-heavy capital
+// letterforms close enough to share stitchpro-backend's single dedicated
+// "Bold Block" lettering alphabet (digitizer/lettering/alphabet_block.py)
+// for now -- "Modern Sans"/"Classic Serif"/"Script" still use the older
+// render-to-image + generic-auto-digitize path until they get their own
+// dedicated glyph sets the same way.
+const LETTERING_ENGINE_FONTS: ReadonlySet<TextFontStyle> = new Set(['Bold Block', 'Varsity']);
 
 const FONTS: TextFontStyle[] = ['Modern Sans', 'Bold Block', 'Classic Serif', 'Script', 'Varsity'];
 const LAYOUTS: TextLayout[] = ['Straight', 'Arc Up', 'Arc Down'];
@@ -33,7 +45,7 @@ const LAYOUTS: TextLayout[] = ['Straight', 'Arc Up', 'Arc Down'];
 export default function TextCreateScreen() {
   const router = useRouter();
   const { isDesktop } = useResponsive();
-  const { setArtwork } = useDigitizeWizard();
+  const { setArtwork, setLetterMeta } = useDigitizeWizard();
 
   const [text, setText] = useState('STITCHPRO');
   const [font, setFont] = useState<TextFontStyle>('Modern Sans');
@@ -44,8 +56,17 @@ export default function TextCreateScreen() {
   const [previewUri, setPreviewUri] = useState<string | null>(null);
   const [rendering, setRendering] = useState(true);
   const [debouncedUri, setDebouncedUri] = useState<string | null>(null);
+  const [debouncedText, setDebouncedText] = useState(text);
   const [colorPicker, setColorPicker] = useState<'text' | 'outline' | null>(null);
   const [continuing, setContinuing] = useState(false);
+
+  // Eligible for the real dedicated satin-column lettering engine (see
+  // useLetteringPreview / stitchpro-backend's digitizer/lettering) --
+  // currently only the bold/block-style fonts with a straight baseline;
+  // Script/Serif/curvy arc layouts fall back to the older render-to-image
+  // + generic-auto-digitize path below exactly as before.
+  const isLetteringFont = LETTERING_ENGINE_FONTS.has(font);
+  const isLetteringEligible = isLetteringFont && layout === 'Straight' && !!text.trim();
 
   useEffect(() => {
     let cancelled = false;
@@ -73,14 +94,44 @@ export default function TextCreateScreen() {
     return () => clearTimeout(t);
   }, [previewUri]);
 
+  // Same debounce for the dedicated lettering engine's text input --
+  // mirrors the image-preview debounce above so fast typing fires at most
+  // one real backend call once the user pauses.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedText(text), STITCH_PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [text]);
+
+  const lettering = useLetteringPreview(
+    isLetteringEligible ? debouncedText : null,
+    LETTERING_PREVIEW_CAP_HEIGHT_MM,
+    color
+  );
+
+  // Only fall back to the generic image-based preview when the dedicated
+  // lettering engine either isn't applicable (wrong font/layout) or has
+  // already tried and failed for this text (unsupported character, or no
+  // backend reachable) -- avoids paying for two real backend digitize
+  // calls for the same text at once while the lettering engine is still
+  // working, but never leaves Bold Block/Varsity with no preview at all
+  // if lettering genuinely can't handle this particular string.
+  const letteringFailed = isLetteringEligible && !lettering.loading && lettering.source === 'none';
+  const useGenericPreview = !isLetteringEligible || letteringFailed;
   const sim = useStitchPreview(
-    debouncedUri ? { uri: debouncedUri } : null,
+    useGenericPreview && debouncedUri ? { uri: debouncedUri } : null,
     LIVE_PREVIEW_WIDTH_MM,
     LIVE_PREVIEW_HEIGHT_MM,
     outlineEnabled ? 2 : 1,
     'fill',
     0
   );
+
+  // The lettering engine is only trusted for the wizard handoff once it has
+  // actually succeeded for the exact text currently on screen (not the
+  // debounced value, which could be stale by the time Continue is tapped,
+  // and not merely "eligible", which says nothing about whether this
+  // specific string's characters/backend reachability actually worked).
+  const letteringReadyForHandoff = isLetteringEligible && lettering.source === 'backend' && debouncedText === text;
 
   const handleContinue = async () => {
     setContinuing(true);
@@ -94,6 +145,7 @@ export default function TextCreateScreen() {
         width: 900,
         height: 480,
       });
+      setLetterMeta(letteringReadyForHandoff ? { text: text.trim(), color } : null);
       setArtwork({ uri, name: `"${text.trim() || 'Text Design'}"`, source: 'generated' });
       router.push('/create/auto-digitize/analyzing');
     } finally {
@@ -112,7 +164,24 @@ export default function TextCreateScreen() {
       <View style={[styles.layout, isDesktop && styles.layoutDesktop]}>
         <View style={[styles.previewCol, isDesktop && styles.previewColDesktop]}>
           <View style={[styles.stage, { height: isDesktop ? 300 : 220 }]}>
-            {rendering && !previewUri ? (
+            {isLetteringEligible && lettering.source === 'backend' ? (
+              // Real satin-column lettering straight from stitchpro-
+              // backend's dedicated alphabet -- clean curves on every
+              // letter, not the generic per-region classifier's FILL/SATIN
+              // mix for a rasterized text image.
+              <EmbossedStitchCanvas
+                segments={lettering.segments}
+                palette={lettering.palette}
+                widthMm={lettering.widthMm || LIVE_PREVIEW_WIDTH_MM}
+                heightMm={lettering.heightMm || LETTERING_PREVIEW_CAP_HEIGHT_MM}
+                progress={1}
+              />
+            ) : isLetteringEligible && lettering.loading ? (
+              <>
+                <ActivityIndicator color={colors.indigo} />
+                <Text style={[typography.bodySmall, styles.stageHint]}>Rendering stitched preview…</Text>
+              </>
+            ) : rendering && !previewUri ? (
               <ActivityIndicator color={colors.indigo} />
             ) : sim.loading ? (
               <>
@@ -154,6 +223,13 @@ export default function TextCreateScreen() {
                 <Chip key={f} label={f} active={font === f} onPress={() => setFont(f)} />
               ))}
             </View>
+            {isLetteringFont && (
+              <Text style={[typography.caption, styles.letteringHint]}>
+                {layout === 'Straight'
+                  ? 'Uses StitchPro\u2019s dedicated lettering engine \u2014 real satin-column letters with clean curves, not a traced image.'
+                  : 'Arc layouts for this font still use the standard image-based digitizer for now \u2014 switch to Straight for the dedicated satin-column engine.'}
+              </Text>
+            )}
 
             <SectionLabel label="Layout" />
             <View style={styles.chipRow}>
@@ -249,6 +325,10 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontFamily: typography.bodyMedium.fontFamily,
     marginTop: spacing.xs,
+  },
+  letteringHint: {
+    color: colors.textSecondary,
+    marginTop: -spacing.xs,
   },
   chipRow: {
     flexDirection: 'row',
