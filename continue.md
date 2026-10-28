@@ -1,7 +1,11 @@
 # StitchPro — Handoff / Continuation Notes
 
-_Last updated: 2026-10-22, later same day (user tested on GitHub Pages after
-waking up and reported a real bug; fixed, verified live, see §6)._
+_Last updated: 2026-10-28 (New stitch types — Appliqué, 3D Puff, Bean,
+Motif — shipped end-to-end across both repos; see the dedicated session
+entry right before §6)._
+
+_Previously updated: 2026-10-22, later same day (user tested on GitHub Pages
+after waking up and reported a real bug; fixed, verified live, see §6)._
 
 _Originally written: 2026-10-22 (overnight autonomous session, while the user slept).
 Written for a fresh AI agent picking this project up in a new chat/session.
@@ -470,6 +474,193 @@ give me the best result" request (background removal was already solid;
 
 ---
 
+## Session: New stitch types — Appliqué, 3D Puff, Bean, Motif (this session)
+
+User picked this from the standing backlog (§8's old item 6, "per-region
+automatic stitch-style classification") and explicitly broadened it to 4
+real stitch types, each auto-selected by the engine per detected region —
+**no manual per-region editor, ever** (confirmed via `ask_user`, consistent
+with the standing "automatic/heuristic, no manual toggle" rule). Build
+order (also confirmed via `ask_user`): 3D Puff first, then Bean/Motif/
+Appliqué together. Shipped as two separate commits, backend then frontend,
+each fully tested before moving on.
+
+### Backend (`stitchpro-backend@b2e7d72`)
+
+- **New `ObjectType` values** in `digitizer/model.py`: `BEAN`, `MOTIF`,
+  `PUFF_3D`, `APPLIQUE` (alongside the existing `RUNNING`/`SATIN`/`FILL`/
+  `CROSS_STITCH`).
+- **New per-type stitch generators**, each in its own package under
+  `digitizer/stitches/`: `bean/`, `motif/`, `puff/` (plus
+  `puff/eligibility.py`), `applique/`. All wired into
+  `digitizer/stitches/dispatch.py`'s `generate_object_stitches`.
+- **Classification heuristics** (all automatic, no user input):
+  - `thin_region.py` gained `DEFAULT_BEAN_MAX_WIDTH_MM=1.0` (hairline
+    strokes get a reinforced multi-pass running stitch instead of a satin
+    column too thin to look right) and
+    `DEFAULT_MOTIF_MIN_ELONGATION_RATIO=10.0` (very long, very thin, mostly-
+    straight regions become a tiled decorative motif instead of satin).
+  - `digitizer/stitches/puff/eligibility.py`'s `is_puff_eligible` —
+    `min_bbox_fill_ratio=0.55`, `min_area_mm2=25.0`,
+    `max_design_area_fraction=0.35` — a region becomes PUFF_3D if it's a
+    solid, reasonably-filled, reasonably-sized-but-not-dominant shape.
+  - `pipeline.py`'s new Appliqué check — `_APPLIQUE_MIN_DOMINANT_AREA_
+    FRACTION=0.40` and `_APPLIQUE_MIN_CONVEXITY=0.85`: the single most
+    dominant, most convex, hole-free region in a design becomes APPLIQUE
+    (a fabric patch sewn on) instead of a dense fill; everything else still
+    falls through to the existing FILL/SATIN/BEAN/MOTIF/PUFF_3D logic.
+  - A letter-"O"-style holed region (`len(rings) >= 2`) is explicitly
+    excluded from both PUFF_3D and APPLIQUE regardless of how dominant/
+    convex its outer ring is — stays FILL, matching pre-existing behavior.
+  - No threshold tuning was ultimately needed beyond these defaults — every
+    initial test mismatch during development traced back to test-image
+    construction artifacts (downscale resampling, float boundary cases,
+    ambiguous overlapping shapes), not the heuristics themselves.
+- **Real machine STOP command — the genuinely new, non-trivial part.**
+  PUFF_3D and APPLIQUE objects end their stitch-out with a `"stop"` event
+  (third element of `generate_object_stitches`' `(x_mm, y_mm, command)`
+  tuple contract, alongside `"stitch"`/`"jump"`), at the same x/y as the
+  immediately preceding point (pure pause, no movement). This required
+  threading a brand-new command type through the *entire* output stack:
+  - `formats/dst/writer.py`'s `compile_design` maps `"stop"` to
+    pyembroidery's real `STOP` command (`_CODE_BY_COMMAND`). At the raw DST
+    byte level `STOP` and `COLOR_CHANGE` are the *identical* 3-byte record
+    (confirmed by reading pyembroidery's own `DstWriter.encode_record`
+    source) — what makes it a genuine pause rather than a color change is
+    simply that no new thread is registered for it, exactly how every
+    commercial digitizing program encodes a mid-design pause in this
+    format.
+  - `formats/points_writer.py` (the separate compiler used by
+    `/api/design/points-to-file` for the frontend's own already-computed
+    point streams) needed the same `"stop": STOP` entry added to its
+    `_COMMANDS` dict — **this was a real bug caught by a new integration
+    test**: without it, a Puff/Appliqué design's point stream would fail
+    to download with `"unknown command 'stop'"` the moment a real user hit
+    Download, because the frontend's download path goes through this
+    module, not `compile_design`.
+  - `digitizer/points_export.py` (JSON preview-points endpoint) already
+    passed `command` through generically — needed zero changes, but its
+    docstring was updated to mention `"stop"` as a valid value.
+- **Tests**: `tests/test_{bean,motif,puff,applique}_stitch.py` (per-type
+  generator unit tests), `tests/test_new_stitch_types_pipeline.py`
+  (classification heuristics against real rendered test images — see the
+  exact geometry recipes below), and `tests/test_api.py`'s new
+  `TestNewStitchTypesRealDownloadFlow` (2 tests exercising the *actual*
+  frontend flow end-to-end: `/api/design/image-to-points` →
+  `/api/design/points-to-file`, confirming a real "stop" command survives
+  the full round trip and produces a valid `pyembroidery.read_dst`-readable
+  file). **Full suite: 230/230 passing** (up from the previously-documented
+  139/139 — the gap also includes several other sessions' worth of tests
+  not individually itemized in this file; see git log for the complete
+  history if ever needed).
+- **Confirmed test-image geometry recipes** (all ≤150px long side to avoid
+  `load_and_downscale`'s `max_dim=150` resampling changing measurements):
+  - BEAN: 140×40px image, `width_mm=28, height_mm=8`, a 2-3px-tall bar →
+    0.6-0.8mm measured width → `ObjectType.BEAN`.
+  - MOTIF: same scale, a 10px-tall bar → ~2.2mm wide, ~24.2mm long,
+    elongation ratio ~11 → `ObjectType.MOTIF`.
+  - PUFF_3D (non-dominant): 210×70px image, three ~55×50px rounded rects
+    in 3 different colors, `width_mm=60, height_mm=20` → at least one
+    becomes PUFF_3D, none becomes APPLIQUE.
+  - APPLIQUE (dominant, hole-free): 160×100px image, one large rounded
+    rect (black) + one small separate gold accent rect, `width_mm=48,
+    height_mm=30` → the dominant shape becomes APPLIQUE, the accent
+    becomes PUFF_3D. **This exact recipe was also used live this session**
+    to confirm the real `/api/design/image-to-points` endpoint returns
+    `stitchTypeBreakdown: [{"type":"APPLIQUE",...},{"type":"PUFF_3D",...}]`
+    with 3 real `"stop"` points in a 1342-point stream.
+  - Letter-O regression guard: 120×120px image, outer+inner-hole ellipses,
+    `40×40mm` → stays `ObjectType.FILL` (never APPLIQUE/PUFF_3D) despite
+    dominance, because of the 2-ring hole check.
+
+### Frontend (`stitch-pro@90d0dab`)
+
+- **`src/utils/dstWriter.ts`** (the client-side DST encoder, used as a
+  fallback when the backend is unreachable, and for the binary-equivalence
+  logic the backend client mirrors): added `'stop'` to the `DstCommand`
+  union, encoded with the exact same byte pattern as `colorChange`
+  (`0b11000011`) — verified correct by round-tripping a frontend-generated
+  `.dst` file through `pyembroidery.read_dst()` in this same session.
+- **`StitchTypeBreakdownEntry['type']`** (`backendClient.ts`) extended with
+  `'BEAN' | 'MOTIF' | 'PUFF_3D' | 'APPLIQUE'`.
+- **"Stitch Types" card** (`create/auto-digitize/preview.tsx`): friendly
+  labels for all 4 new types; PUFF_3D/APPLIQUE chips render in the warning
+  tone with an explicit "your machine will pause mid-stitch" hint line,
+  surfaced automatically whenever the backend's auto-selected regions
+  include either type.
+- **"Machine Pauses" stat** (`StitchStats.tsx` + `stitchPlanner.ts`'s new
+  `stops` field on `RealStitchPlan`/`StitchPlanSummary`) — only shown when
+  non-zero.
+- **Simulator pause markers** (confirmed explicitly via `ask_user` as
+  in-scope, not just "nice to have"): `stitchPreview.ts`'s
+  `pointsToMmSegments` now emits a zero-length `'stop'`-kind marker
+  segment; `EmbossedStitchCanvas.tsx` renders it as a distinct amber ring +
+  pause-bars glyph (not a line, since it has zero length — had to special-
+  case it *before* the existing `len < 1e-6` degenerate-segment skip, which
+  would otherwise silently drop it); click-to-inspect reports it as
+  "Machine Pause" (warning-tone badge); and the Simulator's own playback
+  loop (`simulator.tsx`) now genuinely auto-pauses when progress reaches a
+  real stop (checking every segment index crossed each tick, not just the
+  final one, so a fast speed can't skip past it), showing a
+  "⏸ Paused — place foam/fabric, then press Play" banner distinct from the
+  normal "Stitch-out complete" badge, and resumes cleanly afterward (a ref
+  tracks the highest stop index already handled so resuming doesn't
+  instantly re-trigger).
+- **Verified**: `tsc --noEmit` clean, `eslint` clean (zero new issues —
+  explicitly diffed the handful of remaining findings in touched files
+  against `origin/main` *before* this change to confirm they pre-date it:
+  an unescaped apostrophe in `settings.tsx`, a stale `eslint-disable`
+  comment in `EmbossedStitchCanvas.tsx`, an unused `catch (e)` var in
+  `services/digitizing/index.ts` — none touched by this work, left alone).
+  Ran the real committed `pointsToMmSegments` function (not a
+  reimplementation) against the real backend JSON response for the
+  APPLIQUE+PUFF_3D test image above — confirmed it correctly produces 3
+  zero-length `'stop'`-kind segments. Live-loaded the Simulator screen in a
+  headless Playwright browser with zero console/page errors.
+- **Not fully verified this session**: a complete Playwright click-through
+  of the Auto-Digitize wizard (upload → settings → preview) showing the
+  live "Appliqué"/"3D Puff" chips and pause banner rendered in-browser.
+  Two blockers, both environmental, not code bugs: (1) `expo-image-
+  picker`'s web shim creates its hidden file input and clicks it with a
+  *synthetic* `dispatchEvent(new MouseEvent('click'))` rather than a real
+  `.click()`/trusted gesture, which headless Chromium silently refuses to
+  turn into an actual native file-picker dialog — no `filechooser` event
+  ever fires, no error either, so Playwright can't drive the real upload
+  button at all (a known Chromium/Playwright limitation, not a StitchPro
+  bug; the existing `verify_stitch_types.js` script sidesteps this by
+  clicking a bundled **sample** image instead of uploading). (2) The
+  sandbox's ~1.9GB RAM (see the OOM note earlier in this file) could not
+  sustain Metro bundling *and* a full Auto-Digitize wizard run (image
+  decode + backend digitize + SVG render) under simultaneous Playwright
+  load — the dev server was OOM-killed (exit 137) twice attempting this,
+  even after temporarily swapping one bundled sample asset for the test
+  image on disk (reverted afterward, never committed) to route around
+  blocker (1). If a future session wants this specific end-to-end visual
+  confirmation, do it as its own isolated step: start Metro, let it fully
+  idle/settle, warm the target route via a plain `curl` first, launch
+  Playwright alone (no other heavy process running), and keep the
+  interaction to the minimum needed (ideally reusing the sample-click
+  pattern from `verify_stitch_types.js`, with one sample asset temporarily
+  pointed at a crafted Appliqué/Puff test image via `git checkout` to
+  revert after).
+- Environment rebuild needed yet again this session (same recurring
+  issues as §3/other session entries): `origin` git remote vanished on
+  **both** repos mid-session (not just at session start — it disappeared a
+  second time on `stitch-pro` after already being re-added once), frontend
+  `HEAD` drifted back to a stale pre-rename commit (`6b0fdf6`) with the git
+  **index** itself reverted even though working-tree files were current —
+  recovered cleanly both times via the established recipe (`git remote
+  add origin <token-url>`, fetch, confirm real `origin/main`, `git reset
+  --mixed origin/main`, `diff -rq` against a `/tmp` backup to confirm zero
+  data loss before trusting it). Backend `venv/bin/python3` (the symlink)
+  also went missing again even though `site-packages` was intact — fixed
+  by directly re-symlinking rather than rebuilding the whole venv (faster
+  when only the interpreter symlink itself vanished):
+  `ln -sf /usr/local/bin/python3.13 venv/bin/python3 && ln -sf python3
+  venv/bin/python`.
+
+---
+
 ## 6. Frontend (`stitch-pro`) — structure & status
 
 - Expo **SDK 58** (upgraded from 57 this cycle — `3d7727a`), Expo Router,
@@ -608,7 +799,10 @@ give me the best result" request (background removal was already solid;
   superseded — see below), and a substantial follow-up pass (`6ab041b`,
   latest) covering real-photo background removal, curve smoothing,
   cross-stitch, and solid-fill fixes (see next bullet). **139/139 tests
-  passing** as of `6ab041b`.
+  passing** as of `6ab041b`; since then, also `BEAN`/`MOTIF`/`PUFF_3D`/
+  `APPLIQUE` auto-classified stitch types plus real machine `STOP`-command
+  support (`b2e7d72`, see the dedicated session entry above §6) — **230/230
+  passing** as of `b2e7d72`, the current `HEAD`.
 - **API surface (current, real)**:
   - `GET /api/health`, `GET /api/formats`.
   - `POST /api/design/line-to-dst` — legacy Milestone-1 endpoint, unused by
@@ -724,11 +918,25 @@ give me the best result" request (background removal was already solid;
 5. Local Windows reproduction of the dev environment was previously
    paused, blocked by an unresolved Expo Go sign-in error (not revisited
    this session — may still be an open thread with the user).
-6. Per-region automatic stitch-style classification (e.g. auto-detecting a
-   thin/elongated region and digitizing it as SATIN, or auto-choosing
-   cross-stitch only for regions that look pixelated) is a known, not-yet-
-   implemented follow-up — `stitch_style` today applies to the whole design
-   at once, chosen by the caller.
+6. ~~**Per-region automatic stitch-style classification**~~ — **done**
+   (see the "New stitch types" session entry above §6). Thin/elongated
+   regions auto-classify into BEAN (hairline) or MOTIF (long + very thin,
+   tiled decorative shape); dominant convex hole-free regions become
+   APPLIQUE; solid-but-not-dominant regions become PUFF_3D; everything
+   else still falls through to the existing SATIN/FILL/CROSS_STITCH logic
+   — all automatic per-region, no manual toggle. `stitch_style` (fill vs.
+   cross-stitch) is a separate, still-whole-design-only setting and was
+   NOT folded into this per-region system — a user still explicitly picks
+   Fill or Cross-Stitch for the whole design; only the 4 new types above
+   are auto-selected per region. A real follow-up, if ever requested: an
+   in-app "Stitch Types" legend/help screen explaining what each of the 7
+   now-possible auto-selected types means and why the machine pauses for
+   2 of them (currently only a one-line hint in the Preview screen).
+   Also still open: no live-browser Playwright confirmation of the actual
+   Auto-Digitize wizard (not just the Simulator) showing the new "Stitch
+   Types" chips and pause banner — blocked by an unrelated Chromium/
+   Playwright file-picker limitation and this sandbox's tight memory, see
+   the session entry for the exact retry recipe if ever picked back up.
 7. Persistence (§6) currently only covers this device/browser's local
    storage — there is still no real backend database or multi-device sync.
    If the user wants designs/jobs to follow them across devices or wants
@@ -737,6 +945,6 @@ give me the best result" request (background removal was already solid;
    the user before starting it rather than assuming.
 8. Always re-run the full verification loop before calling anything done:
    `cd stitchpro-backend && venv/bin/python3 -m pytest -q` (expect
-   139/139+), `cd stitch-pro && npx tsc --noEmit` (expect clean), `node
+   230/230+), `cd stitch-pro && npx tsc --noEmit` (expect clean), `node
    scripts/test-merge-*.mjs` for each (expect all green), `npx expo export
    -p web` (expect no errors), then a live-browser smoke check per §4.
