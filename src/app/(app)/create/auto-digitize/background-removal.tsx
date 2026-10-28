@@ -70,7 +70,11 @@ export default function BackgroundRemovalScreen() {
 
   const handleContinue = () => {
     setRemoveBackground(choice === 'removed');
-    router.push('/create/auto-digitize/analyzing');
+    // The next step traces whichever image the user just picked into a
+    // real, editable vector and lets them fix the mask/shapes by hand --
+    // see create/auto-digitize/vectorize.tsx. It fails soft on its own if
+    // the backend is unreachable, so it's always safe to route there.
+    router.push('/create/auto-digitize/vectorize');
   };
 
   return (
@@ -125,7 +129,7 @@ export default function BackgroundRemovalScreen() {
 
       <WizardFooter
         onBack={() => router.back()}
-        continueLabel="Continue to Analysis"
+        continueLabel="Continue to Vectorize"
         continueDisabled={loading}
         onContinue={handleContinue}
       />

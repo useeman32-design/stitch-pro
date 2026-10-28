@@ -7,6 +7,7 @@ import {
   type StitchPlanSummary,
 } from '@/services/digitizing';
 import type { DstPoint } from '@/utils/dstWriter';
+import type { BgStroke, VectorRegion } from '@/services/digitizing/backendClient';
 
 export interface UploadedArtwork {
   uri: string;
@@ -47,6 +48,27 @@ interface DigitizeWizardValue {
    * completely unchanged. */
   letterMeta: { text: string; color: string } | null;
   setLetterMeta: (meta: { text: string; color: string } | null) => void;
+  /** Real, editable vector regions the user confirmed on
+   * create/auto-digitize/vectorize.tsx -- traced from their chosen
+   * background-removal image, then possibly selected/deleted/redrawn by
+   * hand. `null` until that screen runs (or when it's skipped because the
+   * backend was unreachable); every downstream digitize/preview call
+   * prefers this over re-tracing the raw image whenever it's set, so the
+   * user's region edits are what actually gets stitched, not a fresh
+   * re-trace of the original artwork. See `useStitchPreview`'s `regions`
+   * param and `regionsToPointsViaBackend`. */
+  vectorRegions: VectorRegion[] | null;
+  /** The mm canvas size `vectorRegions` was traced/edited at -- needed to
+   * correctly rescale those regions if the user later picks a different
+   * design size on the Settings screen (see `rescaleVectorRegions`). */
+  vectorRegionsSizeMm: { width: number; height: number } | null;
+  setVectorRegions: (regions: VectorRegion[] | null, sizeMm?: { width: number; height: number }) => void;
+  /** Manual background-mask correction brush strokes recorded on the
+   * vectorize screen (adjustable-size restore/erase brush) -- kept here
+   * so navigating back to that screen (or re-running vectorization after
+   * a settings change) doesn't lose them. */
+  bgStrokes: BgStroke[];
+  setBgStrokes: (strokes: BgStroke[]) => void;
   setArtwork: (artwork: UploadedArtwork) => void;
   clearArtwork: () => void;
   setAnalysis: (analysis: AnalysisResult) => void;
@@ -71,6 +93,17 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
   const [stitchPlan, setStitchPlanState] = useState<StitchPlanSummary | null>(null);
   const [dstPoints, setDstPointsState] = useState<DstPoint[] | null>(null);
   const [letterMeta, setLetterMetaState] = useState<{ text: string; color: string } | null>(null);
+  const [vectorRegions, setVectorRegionsState] = useState<VectorRegion[] | null>(null);
+  const [vectorRegionsSizeMm, setVectorRegionsSizeMmState] = useState<{ width: number; height: number } | null>(null);
+  const [bgStrokes, setBgStrokesState] = useState<BgStroke[]>([]);
+
+  const setVectorRegions = useCallback(
+    (regions: VectorRegion[] | null, sizeMm?: { width: number; height: number }) => {
+      setVectorRegionsState(regions);
+      setVectorRegionsSizeMmState(regions && sizeMm ? sizeMm : null);
+    },
+    []
+  );
 
   const updateSettings = useCallback((partial: Partial<DigitizeSettings>) => {
     setSettings((prev) => {
@@ -108,6 +141,9 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
     setDstPointsState(null);
     setRemoveBackgroundState(true);
     setLetterMetaState(null);
+    setVectorRegionsState(null);
+    setVectorRegionsSizeMmState(null);
+    setBgStrokesState([]);
   }, []);
 
   const value = useMemo(
@@ -122,10 +158,18 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       setRemoveBackground: setRemoveBackgroundState,
       letterMeta,
       setLetterMeta: setLetterMetaState,
+      vectorRegions,
+      vectorRegionsSizeMm,
+      setVectorRegions,
+      bgStrokes,
+      setBgStrokes: setBgStrokesState,
       setArtwork: setArtworkState,
       clearArtwork: () => {
         setArtworkState(null);
         setLetterMetaState(null);
+        setVectorRegionsState(null);
+        setVectorRegionsSizeMmState(null);
+        setBgStrokesState([]);
       },
       setAnalysis,
       updateSettings,
@@ -146,6 +190,10 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       dstPoints,
       removeBackground,
       letterMeta,
+      vectorRegions,
+      vectorRegionsSizeMm,
+      setVectorRegions,
+      bgStrokes,
       setAnalysis,
       updateSettings,
       addThreadColor,

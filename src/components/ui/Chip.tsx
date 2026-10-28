@@ -6,11 +6,16 @@ interface ChipProps {
   label: string;
   active: boolean;
   onPress: () => void;
+  /** Optional leading icon -- e.g. the restore/erase brush-mode toggle on
+   * create/auto-digitize's background-mask brush. Omit for the plain
+   * text-only chip every other caller already uses. */
+  icon?: React.ReactNode;
 }
 
-export function Chip({ label, active, onPress }: ChipProps) {
+export function Chip({ label, active, onPress, icon }: ChipProps) {
   return (
-    <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
+    <Pressable onPress={onPress} style={[styles.chip, active && styles.chipActive, !!icon && styles.chipWithIcon]}>
+      {icon}
       <Text
         style={[
           typography.bodySmall,
@@ -33,5 +38,10 @@ const styles = StyleSheet.create({
   },
   chipActive: {
     backgroundColor: colors.indigo,
+  },
+  chipWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
 });

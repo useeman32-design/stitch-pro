@@ -30,7 +30,7 @@ import {
 } from '@/services/digitizing';
 import { threadsService } from '@/services/threads';
 import type { ThreadColor } from '@/services/types';
-import { analyzeImageViaBackend } from '@/services/digitizing/backendClient';
+import { analyzeImageViaBackend, regionsToPointsViaBackend, rescaleVectorRegions } from '@/services/digitizing/backendClient';
 import { generateRealStitchPlan, summarizePoints } from '@/utils/stitchPlanner';
 
 const stitchStyles: { label: string; value: StitchStyle }[] = [
@@ -102,6 +102,8 @@ export default function DesignSettingsScreen() {
     setDstPoints,
     removeBackground,
     letterMeta,
+    vectorRegions,
+    vectorRegionsSizeMm,
   } = useDigitizeWizard();
   const [threads, setThreads] = useState<ThreadColor[]>([]);
   const [generating, setGenerating] = useState(false);
@@ -181,7 +183,32 @@ export default function DesignSettingsScreen() {
       const densityMm = settings.stitchStyle === 'cross'
         ? DENSITY_CROSS_CELL_MM[settings.density]
         : DENSITY_FILL_SPACING_MM[settings.density];
-      const backendResult = artwork?.uri
+      // A design the user ran through the vectorize/region-editor screen
+      // (create/auto-digitize/vectorize.tsx) already has its own real,
+      // possibly-hand-edited shapes -- build straight from those instead
+      // of re-tracing the original image, so the user's edits (deleted/
+      // fixed regions, brush-corrected background) are what actually gets
+      // stitched. Rescaled first in case the size changed since that
+      // screen ran (see `rescaleVectorRegions`'s own docstring).
+      const regionsForGenerate =
+        vectorRegions && vectorRegions.length && vectorRegionsSizeMm
+          ? rescaleVectorRegions(
+              vectorRegions,
+              vectorRegionsSizeMm.width,
+              vectorRegionsSizeMm.height,
+              settings.widthMm,
+              settings.heightMm
+            )
+          : null;
+      const backendResult = regionsForGenerate
+        ? await regionsToPointsViaBackend(regionsForGenerate, settings.widthMm, settings.heightMm, {
+            stitchStyle: settings.stitchStyle,
+            angleDeg: settings.angleDeg,
+            densityMm,
+            stitchLengthMm: DENSITY_STITCH_LENGTH_MM[settings.density],
+            borderWidthMm: resolveBorderWidthMm(settings),
+          })
+        : artwork?.uri
         ? await analyzeImageViaBackend(artwork.uri, settings.widthMm, settings.heightMm, {
             maxColors: 6,
             stitchStyle: settings.stitchStyle,

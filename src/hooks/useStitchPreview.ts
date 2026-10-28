@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
-import { analyzeImageViaBackend } from '@/services/digitizing/backendClient';
+import { analyzeImageViaBackend, regionsToPointsViaBackend } from '@/services/digitizing/backendClient';
 import { analyzeImage, buildStitchSegments, resolveImageUri } from '@/utils/stitchEngine';
 import { gridSegmentsToMm, pointsToMmSegments, type MmSegment } from '@/utils/stitchPreview';
 import type { DstPoint } from '@/utils/dstWriter';
-import type { StitchTypeBreakdownEntry } from '@/services/digitizing/backendClient';
+import type { StitchTypeBreakdownEntry, VectorRegion } from '@/services/digitizing/backendClient';
 
 export type StitchPreviewSource = 'backend' | 'client' | 'none';
 
@@ -72,27 +72,44 @@ export function useStitchPreview(
   removeBackground?: boolean,
   densityMm?: number,
   stitchLengthMm?: number,
-  borderWidthMm?: number
+  borderWidthMm?: number,
+  /** When given (non-empty), this is a design the user already ran through
+   * the editable-vector pipeline (create/auto-digitize/vectorize.tsx) and
+   * possibly edited (selected/deleted/redrawn regions) -- skip the raw-
+   * image analysis entirely and build the design straight from these
+   * regions instead, so the preview (and the final digitized design)
+   * reflects the user's edits, not a fresh re-trace of the original
+   * image. See `regionsToPointsViaBackend`. */
+  regions?: VectorRegion[] | null
 ): StitchPreviewResult {
   const uri = resolveImageUri(source);
-  const [state, setState] = useState<StitchPreviewResult>({ ...EMPTY, loading: !!uri, source: 'none' });
+  const hasRegions = !!(regions && regions.length);
+  const [state, setState] = useState<StitchPreviewResult>({ ...EMPTY, loading: !!uri || hasRegions, source: 'none' });
 
   useEffect(() => {
-    if (!uri) return undefined;
+    if (!uri && !hasRegions) return undefined;
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- kicking off the async analysis below
     setState((s) => ({ ...s, loading: true }));
 
     (async () => {
-      const backendResult = await analyzeImageViaBackend(uri, widthMm, heightMm, {
-        maxColors,
-        stitchStyle,
-        angleDeg,
-        removeBackground,
-        densityMm,
-        stitchLengthMm,
-        borderWidthMm,
-      });
+      const backendResult = hasRegions
+        ? await regionsToPointsViaBackend(regions as VectorRegion[], widthMm, heightMm, {
+            stitchStyle,
+            angleDeg,
+            densityMm,
+            stitchLengthMm,
+            borderWidthMm,
+          })
+        : await analyzeImageViaBackend(uri, widthMm, heightMm, {
+            maxColors,
+            stitchStyle,
+            angleDeg,
+            removeBackground,
+            densityMm,
+            stitchLengthMm,
+            borderWidthMm,
+          });
 
       if (cancelled) return;
       if (backendResult) {
@@ -106,6 +123,16 @@ export function useStitchPreview(
           dstPoints: backendResult.points,
           stitchTypeBreakdown: backendResult.stitchTypeBreakdown,
         });
+        return;
+      }
+
+      // A regions-based design has no raw pixels for the client-only
+      // fallback below to analyze (and falling back to one would silently
+      // discard whatever the user edited on the vectorize/region-editor
+      // screen) -- end at `source: 'none'` instead, same as native with no
+      // reachable backend.
+      if (hasRegions) {
+        if (!cancelled) setState({ ...EMPTY, loading: false, source: 'none' });
         return;
       }
 
@@ -140,9 +167,21 @@ export function useStitchPreview(
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uri, widthMm, heightMm, maxColors, stitchStyle, angleDeg, removeBackground, densityMm, stitchLengthMm, borderWidthMm]);
+  }, [
+    uri,
+    widthMm,
+    heightMm,
+    maxColors,
+    stitchStyle,
+    angleDeg,
+    removeBackground,
+    densityMm,
+    stitchLengthMm,
+    borderWidthMm,
+    regions,
+  ]);
 
-  if (!uri) {
+  if (!uri && !hasRegions) {
     return { ...EMPTY, loading: false, source: 'none' };
   }
   return state;

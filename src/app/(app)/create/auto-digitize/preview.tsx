@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { ShieldCheck } from 'lucide-react-native';
@@ -23,6 +23,7 @@ import {
   resolveBorderWidthMm,
 } from '@/services/digitizing';
 import { summarizePoints } from '@/utils/stitchPlanner';
+import { rescaleVectorRegions } from '@/services/digitizing/backendClient';
 import type { StitchTypeBreakdownEntry } from '@/services/digitizing/backendClient';
 
 // Friendly, non-technical labels for the automatic per-region stitch type
@@ -84,6 +85,8 @@ export default function DesignPreviewScreen() {
     threadColors,
     removeBackground,
     letterMeta,
+    vectorRegions,
+    vectorRegionsSizeMm,
     updateSettings,
     setStitchPlan,
     setDstPoints,
@@ -134,8 +137,27 @@ export default function DesignPreviewScreen() {
   // size field for a text design) and the live density slider as the satin
   // crossing spacing, exactly like every other design type's density control.
   const lettering = useLetteringPreview(letterMeta ? letterMeta.text : null, settings.heightMm, letterMeta?.color ?? '#111111', liveDensityMm);
+  // A design the user ran through the vectorize/region-editor screen
+  // (create/auto-digitize/vectorize.tsx) carries its own real, possibly
+  // hand-edited shapes -- rescaled to the current size in case it changed
+  // since that screen ran (see `rescaleVectorRegions`) -- so the live
+  // preview here reflects the user's edits instead of a fresh re-trace of
+  // the original image, exactly like the final Settings-screen generate.
+  const regionsForPreview = useMemo(
+    () =>
+      vectorRegions && vectorRegions.length && vectorRegionsSizeMm
+        ? rescaleVectorRegions(
+            vectorRegions,
+            vectorRegionsSizeMm.width,
+            vectorRegionsSizeMm.height,
+            settings.widthMm,
+            settings.heightMm
+          )
+        : null,
+    [vectorRegions, vectorRegionsSizeMm, settings.widthMm, settings.heightMm]
+  );
   const sim = useStitchPreview(
-    !letterMeta && artwork ? { uri: artwork.uri } : null,
+    !letterMeta && !regionsForPreview && artwork ? { uri: artwork.uri } : null,
     settings.widthMm,
     settings.heightMm,
     threadColors.length || 6,
@@ -144,7 +166,8 @@ export default function DesignPreviewScreen() {
     removeBackground,
     liveDensityMm,
     liveStitchLengthMm,
-    liveBorderWidthMm
+    liveBorderWidthMm,
+    !letterMeta ? regionsForPreview : null
   );
   // From here on, `activeSim` is what the rest of this screen renders from
   // and syncs into the wizard context -- identical shape either way, so

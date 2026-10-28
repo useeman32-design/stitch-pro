@@ -451,3 +451,272 @@ export async function textToFileViaBackend(
   }
 }
 
+// --- Editable-vector pipeline ---------------------------------------------
+// "Whichever background-removal choice the user makes must be converted
+// into a real, editable vector, not just handed to the digitizer as a
+// raster" + "an adjustable-size brush to manually restore or erase parts
+// of the background-removal mask" + "select/delete/redraw vector regions
+// after generation" -- see stitchpro-backend's digitizer/pipeline.py
+// (image_to_vector_regions / design_from_region_records) and api/app.py's
+// /api/design/vectorize, /regions-to-points, /regions-to-file routes.
+
+/** A single detected (or user-edited) shape -- `rings[0]` is the outer
+ * boundary, any further entries are holes, each a list of `[xMm, yMm]`
+ * points. Matches an `EmbroideryObject`'s own `geometry` shape for a
+ * FILL/CROSS_STITCH/PUFF_3D region, so a region the user keeps untouched
+ * digitizes identically to the non-editable path. */
+export interface VectorRegion {
+  id: string;
+  colorHex: string;
+  areaMm2: number;
+  rings: [number, number][][];
+}
+
+/** One manual background-mask correction brush stroke (brief: "an
+ * adjustable-size brush to manually restore or erase parts of the
+ * background-removal mask"). Coordinates and `radius` are normalized 0..1
+ * over the image, so a stroke recorded against a preview shown at any
+ * resolution reproduces the identical correction wherever the backend
+ * actually processes the image. `"restore"` forces the brushed area back
+ * to foreground (for part of the real design the automatic detection
+ * wrongly swept into the background); `"erase"` forces it to background
+ * (for material the automatic detection missed). */
+export interface BgStroke {
+  mode: 'restore' | 'erase';
+  /** Brush radius as a fraction of the image's longer side, e.g. 0.03 for
+   * a fine brush, 0.15 for a broad one. */
+  radius: number;
+  points: [number, number][];
+}
+
+/**
+ * Rescales every region's ring coordinates from the mm canvas they were
+ * traced at (`fromWidthMm` x `fromHeightMm`, i.e. whatever size was in
+ * effect on create/auto-digitize/vectorize.tsx when the user confirmed
+ * their edits) to whatever size the design actually ends up at
+ * (`toWidthMm` x `toHeightMm`, chosen afterwards on the Settings screen).
+ * Non-uniform (independent x/y factors) to match exactly how the non-
+ * editable path already treats a size change -- `image_to_design` always
+ * stretches/fits the traced artwork to the requested box, never preserves
+ * its own aspect ratio -- so a region the user left untouched ends up in
+ * exactly the same place a fresh re-trace at the new size would put it.
+ * A no-op (returns `regions` unchanged, by reference) when the size
+ * hasn't actually changed, the overwhelmingly common case.
+ */
+export function rescaleVectorRegions(
+  regions: VectorRegion[],
+  fromWidthMm: number,
+  fromHeightMm: number,
+  toWidthMm: number,
+  toHeightMm: number
+): VectorRegion[] {
+  if (fromWidthMm <= 0 || fromHeightMm <= 0) return regions;
+  if (Math.abs(fromWidthMm - toWidthMm) < 1e-6 && Math.abs(fromHeightMm - toHeightMm) < 1e-6) return regions;
+  const sx = toWidthMm / fromWidthMm;
+  const sy = toHeightMm / fromHeightMm;
+  return regions.map((r) => ({
+    ...r,
+    areaMm2: r.areaMm2 * sx * sy,
+    rings: r.rings.map((ring) => ring.map(([x, y]) => [x * sx, y * sy] as [number, number])),
+  }));
+}
+
+export interface VectorizeResult {
+  widthMm: number;
+  heightMm: number;
+  artworkKind: string | null;
+  artworkConfidence: number | null;
+  regions: VectorRegion[];
+}
+
+/**
+ * Runs the real backend's classify/background-removal/quantize/raster-to-
+ * polygon tracing pipeline (everything `analyzeImageViaBackend` does,
+ * short of generating any actual stitches) and returns the traced shapes
+ * as plain editable vector data for a client to render as selectable/
+ * deletable paths. Pass the result's `regions` (minus whatever the user
+ * removed, plus any hand-edits) to `regionsToPointsViaBackend` (preview)
+ * or `regionsToFileViaBackend` (export) to finish building the design.
+ *
+ * `bgStrokes`, when given, is applied on top of the automatic background
+ * mask before quantization -- see `BgStroke`.
+ *
+ * Returns `null` on any failure (backend disabled/unreachable/timeout/
+ * error, or an image with no detectable foreground) -- callers should
+ * fall back to the existing non-editable `analyzeImageViaBackend` path in
+ * that case, exactly like every other backend call in this file.
+ */
+export async function vectorizeImageViaBackend(
+  imageUri: string,
+  widthMm: number,
+  heightMm: number,
+  options: {
+    maxColors?: number;
+    maxDim?: number;
+    smoothCurves?: boolean;
+    removeBackground?: boolean;
+    autoVectorize?: boolean;
+    bgStrokes?: BgStroke[];
+  } = {}
+): Promise<VectorizeResult | null> {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl || !imageUri) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+
+  try {
+    const imageResponse = await fetch(imageUri);
+    if (!imageResponse.ok) return null;
+    const blob = await imageResponse.blob();
+
+    const form = new FormData();
+    form.append('image', blob as any, 'artwork.png');
+    form.append('width_mm', String(widthMm));
+    form.append('height_mm', String(heightMm));
+    form.append('max_colors', String(options.maxColors ?? 6));
+    if (options.maxDim !== undefined) form.append('max_dim', String(options.maxDim));
+    if (options.smoothCurves !== undefined) form.append('smooth_curves', String(options.smoothCurves));
+    if (options.removeBackground !== undefined) form.append('remove_background', String(options.removeBackground));
+    if (options.autoVectorize !== undefined) form.append('auto_vectorize', String(options.autoVectorize));
+    if (options.bgStrokes && options.bgStrokes.length) form.append('bg_strokes', JSON.stringify(options.bgStrokes));
+
+    const response = await fetch(`${baseUrl}/api/design/vectorize`, {
+      method: 'POST',
+      body: form as any,
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!Array.isArray(data.regions) || !data.regions.length) return null;
+
+    return {
+      widthMm: data.widthMm,
+      heightMm: data.heightMm,
+      artworkKind: data.artworkKind ?? null,
+      artworkConfidence: data.artworkConfidence ?? null,
+      regions: data.regions,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Shared request body for both regions-to-points and regions-to-file --
+ * see those functions. */
+function buildRegionsRequestBody(
+  regions: VectorRegion[],
+  widthMm: number,
+  heightMm: number,
+  options: {
+    stitchStyle?: 'fill' | 'cross';
+    angleDeg?: number;
+    densityMm?: number;
+    stitchLengthMm?: number;
+    borderWidthMm?: number;
+    artworkKind?: string | null;
+    artworkConfidence?: number | null;
+  }
+) {
+  return {
+    widthMm,
+    heightMm,
+    regions: regions.map((r) => ({ colorHex: r.colorHex, rings: r.rings })),
+    stitchStyle: options.stitchStyle ?? 'fill',
+    ...(options.angleDeg !== undefined ? { angleDeg: options.angleDeg } : {}),
+    ...(options.densityMm !== undefined ? { densityMm: options.densityMm } : {}),
+    ...(options.stitchLengthMm !== undefined ? { stitchLengthMm: options.stitchLengthMm } : {}),
+    ...(options.borderWidthMm !== undefined ? { borderWidthMm: options.borderWidthMm } : {}),
+    ...(options.artworkKind ? { artworkKind: options.artworkKind } : {}),
+    ...(options.artworkConfidence != null ? { artworkConfidence: options.artworkConfidence } : {}),
+  };
+}
+
+/**
+ * Builds a real digitized design from a (possibly user-edited) region
+ * list -- normally `vectorizeImageViaBackend`'s own output, after the user
+ * has selected/deleted/redrawn shapes on top of it -- and returns the same
+ * point-stream contract as `analyzeImageViaBackend`, for preview
+ * rendering. A region the user left untouched digitizes identically to
+ * the non-editable path (same per-region SATIN/BEAN/MOTIF/PUFF_3D/
+ * APPLIQUE auto-classification). Returns `null` on any failure.
+ */
+export async function regionsToPointsViaBackend(
+  regions: VectorRegion[],
+  widthMm: number,
+  heightMm: number,
+  options: Parameters<typeof buildRegionsRequestBody>[3] = {}
+): Promise<BackendPointsResult | null> {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl || !regions.length) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TEXT_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${baseUrl}/api/design/regions-to-points`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildRegionsRequestBody(regions, widthMm, heightMm, options)),
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (!Array.isArray(data.points) || !data.points.length) return null;
+
+    return {
+      widthMm: data.width_mm,
+      heightMm: data.height_mm,
+      threads: data.threads ?? [],
+      points: data.points,
+      stitchTypeBreakdown: Array.isArray(data.stitchTypeBreakdown) ? data.stitchTypeBreakdown : [],
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Same region-list-in design-building as `regionsToPointsViaBackend`, but
+ * returns a real downloadable file -- the editable-vector pipeline's
+ * equivalent of `exportViaBackend`, for final export once the user has
+ * confirmed their edited region list. Returns `null` on any failure.
+ */
+export async function regionsToFileViaBackend(
+  regions: VectorRegion[],
+  widthMm: number,
+  heightMm: number,
+  format: BackendFormat,
+  name: string,
+  options: Parameters<typeof buildRegionsRequestBody>[3] = {}
+): Promise<Blob | null> {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl || !regions.length) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TEXT_FETCH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${baseUrl}/api/design/regions-to-file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...buildRegionsRequestBody(regions, widthMm, heightMm, options),
+        format,
+        name: name.replace(/[^A-Za-z0-9-_]/g, '').slice(0, 32) || 'design',
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    return await response.blob();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
