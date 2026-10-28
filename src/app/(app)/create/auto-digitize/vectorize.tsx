@@ -108,6 +108,17 @@ export default function VectorizeScreen() {
     setRegions((prev) => prev.filter((r) => r.id !== id));
   };
 
+  const handleRedrawRegion = (id: string, rings: VectorRegion['rings'], areaMm2: number) => {
+    setRegions((prev) => prev.map((r) => (r.id === id ? { ...r, rings, areaMm2 } : r)));
+  };
+
+  const handleAddRegion = (region: { colorHex: string; rings: VectorRegion['rings']; areaMm2: number }) => {
+    setRegions((prev) => [
+      ...prev,
+      { id: `region-added-${Date.now()}-${prev.length}`, colorHex: region.colorHex, rings: region.rings, areaMm2: region.areaMm2 },
+    ]);
+  };
+
   const handleContinue = () => {
     if (unavailable || !regions.length) {
       setVectorRegions(null);
@@ -170,6 +181,8 @@ export default function VectorizeScreen() {
             heightMm={previewHeightMm}
             regions={regions}
             onDeleteRegion={handleDeleteRegion}
+            onRedrawRegion={handleRedrawRegion}
+            onAddRegion={handleAddRegion}
           />
         </Card>
       )}
