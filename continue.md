@@ -1185,3 +1185,91 @@ expected screen region, before clicking.
 Not touched this session: item 4 (photo-of-real-embroidery extraction,
 not started) and item 5 (knot-realism preview upgrade, not started,
 correctly deferred last per the user's own stated priority).
+
+## Issue 1 frontend: garment-photo design-region extraction + a real webOnlyProps bug found via screenshot verification
+
+Shipped the frontend half of "when creating with realworld photo... it
+should detect it and extract only the design" (backend half -- the
+`/api/design/detect-region` endpoint in stitchpro-backend -- was already
+done in an earlier session). New `create/auto-digitize/design-region.tsx`
+("Find the Design") screen sits between background-removal and
+vectorize: calls the backend detector, shows the suggested box as a
+draggable/resizable overlay (`DesignRegionCropper`), and requires the
+user to confirm/adjust before continuing -- confidently-flat artwork
+(`skip: true` from the backend) bypasses this screen entirely. Reuses
+the existing per-region stitch-type heuristic unchanged, as the user
+explicitly locked in -- no new stitch-recommendation logic was built.
+Pushed as `4acedc1`.
+
+**A real bug was found and fixed while producing visual proof for this
+feature** (the user asked for actual screenshots, not just "tests
+pass"): `DesignRegionCropper`'s stage `<View>` spread `{...webOnlyProps}`
+*after* its real `style={[styles.stage, { width, height }]}` prop, and
+`webOnlyProps` itself carried its own `style: { cursor: 'crosshair' }`
+key. On web, a later spread prop with the same key **replaces** rather
+than merges, so the real computed pixel width/height were silently
+discarded and the entire crop stage (image, dim mask, box, handles)
+collapsed to a heightless 0px box -- the screen rendered as a plain gray
+rectangle with no visible photo, while every piece of React state/DOM
+layout math *looked* correct from the outside (console-logging the
+component's own width/height variables showed the right numbers; the
+bug was purely in how the JSX spread order discarded them at the last
+step). `VectorRegionEditor` already had the identical hazard and had
+already solved it correctly elsewhere in its own code (merging cursor
+style into the `style` *array* instead) -- `DesignRegionCropper` (built
+newer) just didn't follow that same pattern. Found and fixed the
+identical latent bug in `BackgroundMaskBrush.tsx` too (pre-existing,
+unrelated to this feature -- would have collapsed that screen's brush
+canvas to 0 height on web). If a future screen ever needs a web-only
+`style` override spread via a `webOnlyProps`-style object, pull `style`
+out of that object and merge it into the real element's `style` array
+instead of spreading it as a separate prop -- do not spread an object
+containing its own `style` key after the element's main `style` prop.
+
+**Verified via a real headless-browser run against the actual running
+app + backend** (not just tsc/lint) across three different example
+photos uploaded through the real upload flow: a t-shirt-on-a-person
+(clean background), a hoodie-on-a-person (cluttered background --
+correctly flagged "low-confidence guess"), and clean flat logo art
+(correctly auto-skipped the crop screen straight to Vectorize & Edit,
+with 3 traced vector regions). Screenshots live in the shared workspace
+at `screenshots/` (not part of this repo) if this session's images are
+still around; regenerate via `screenshot_script.py` in the workspace
+root if not.
+
+**New environment note -- this sandbox has no swap and WILL OOM-kill
+Metro mid-session under combined load (Flask + Metro + a Playwright
+Chromium).** Fix applied this session: `sudo fallocate -l 1536M
+/swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo
+swapon /swapfile` -- gives the kernel room to page instead of invoking
+the OOM killer. This is **not persisted across environment resets**
+(swapfile lives outside the snapshotted workspace), so re-run it at the
+start of any future session that needs Metro + Playwright running
+together. Also run the backend via a `debug=False` launcher (see
+`stitchpro-backend/run_no_debug.py`) instead of Flask's default
+reloader-mode `app.run()` when running alongside Metro + a browser --
+the reloader's double-process overhead was the other big contributor.
+
+**Git-HEAD-drift recurred again this session, more severely than
+before** -- local HEAD was ~40 commits behind `origin/main` (an entire
+session's worth of already-pushed history, including Item 4, Item 5,
+and the vector-region-editor polish), even though the working tree on
+disk still had all of that newer code intact. Recovery: `git fetch
+origin main`, then `git reset --mixed origin/main` (NOT `--hard` --
+mixed preserves the working tree, only rewinds HEAD/index), which
+correctly left only the genuinely new/uncommitted files showing in
+`git status` afterward. Always re-run this drift check (`git fetch` +
+compare `git rev-parse HEAD` vs `origin/main`) before trusting
+`git status`'s "modified" list at the start of any new session in
+either repo -- a long "modified" list may really be "local HEAD is
+stale", not "N new uncommitted changes".
+
+Deployed to GitHub Pages (`4acedc1`'s build) and live-verified: the
+`/create/auto-digitize/design-region` route resolves (200, after normal
+GH Pages propagation delay of 30-60s) and loads cleanly with zero
+console errors; it correctly redirects to the plain upload screen when
+visited directly with no artwork in wizard context (expected guard
+behavior, not a bug). Full click-through of the detect-region call
+itself isn't exercisable against the static Pages deploy (no live
+backend there) -- same known, accepted loopback/CORS limitation as every
+other backend-dependent flow in this app's production deploy.
