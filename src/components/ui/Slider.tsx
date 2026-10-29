@@ -102,11 +102,15 @@ export function Slider({
       ref={trackRef}
       accessibilityLabel={accessibilityLabel}
       style={styles.hitArea}
-      onStartShouldSetResponder={() => true}
-      onMoveShouldSetResponder={() => true}
-      onResponderGrant={handleStart}
-      onResponderMove={handleMove}
-      onResponderRelease={handleEnd}
+      {...(Platform.OS === 'web'
+        ? {}
+        : {
+            onStartShouldSetResponder: () => true,
+            onMoveShouldSetResponder: () => true,
+            onResponderGrant: handleStart,
+            onResponderMove: handleMove,
+            onResponderRelease: handleEnd,
+          })}
       onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
       {...webHandlers}
     >

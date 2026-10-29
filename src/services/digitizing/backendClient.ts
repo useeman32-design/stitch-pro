@@ -351,6 +351,14 @@ function blobToDataUri(blob: Blob): Promise<string> {
  * below (and ultimately to the export endpoints) -- the server recomputes
  * the identical mask rather than needing this preview PNG re-uploaded.
  *
+ * `bgStrokes`, when given, is applied on top of the automatic mask before
+ * this preview is rendered -- see `BgStroke` and
+ * `vectorizeImageViaBackend`'s own `bgStrokes` for the identical shape.
+ * create/auto-digitize/vectorize.tsx's "Fix Background" tab calls this
+ * again with the user's current strokes after "Apply Brush Edits" so the
+ * preview they're brushing against visually reflects their own
+ * corrections, not just the automatic mask forever.
+ *
  * Returns `null` on any failure (backend disabled/unreachable/timeout/
  * error, or an unreadable image) -- callers should treat that as "no
  * preview available" and let the user continue with the original image
@@ -359,7 +367,8 @@ function blobToDataUri(blob: Blob): Promise<string> {
 export async function removeBackgroundPreviewViaBackend(
   imageUri: string,
   maxDim?: number,
-  crop?: DesignRegionCrop | null
+  crop?: DesignRegionCrop | null,
+  bgStrokes?: BgStroke[]
 ): Promise<string | null> {
   const baseUrl = getBackendUrl();
   if (!baseUrl || !imageUri) return null;
@@ -376,6 +385,7 @@ export async function removeBackgroundPreviewViaBackend(
     form.append('image', blob as any, 'artwork.png');
     if (maxDim !== undefined) form.append('max_dim', String(maxDim));
     if (crop) form.append('crop', JSON.stringify(crop));
+    if (bgStrokes && bgStrokes.length) form.append('bg_strokes', JSON.stringify(bgStrokes));
 
     const response = await fetch(`${baseUrl}/api/design/remove-background`, {
       method: 'POST',

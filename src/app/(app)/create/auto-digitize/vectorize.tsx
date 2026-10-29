@@ -84,6 +84,23 @@ export default function VectorizeScreen() {
     [artwork, removeBackground, forcePhoto, designRegionCrop]
   );
 
+  // Re-fetches the "Fix Background" preview image itself with the user's
+  // current strokes baked in, so what they see stays in sync with what
+  // `runVectorize` above is really correcting -- without this, brushing
+  // looked like it visually did nothing (even though the final traced
+  // regions really were changing), since the preview the brush draws over
+  // was only ever the original, un-corrected mask. See
+  // `removeBackgroundPreviewViaBackend`'s own `bgStrokes` comment.
+  const refreshMaskPreview = useCallback(
+    (strokes: BgStroke[]) => {
+      if (!artwork) return;
+      removeBackgroundPreviewViaBackend(artwork.uri, undefined, designRegionCrop ?? undefined, strokes).then(
+        setMaskPreviewUri
+      );
+    },
+    [artwork, designRegionCrop]
+  );
+
   useEffect(() => {
     if (!artwork) {
       router.replace('/create/auto-digitize');
@@ -114,10 +131,12 @@ export default function VectorizeScreen() {
   const handleClearStrokes = () => {
     setBgStrokes([]);
     runVectorize([]);
+    refreshMaskPreview([]);
   };
 
   const handleApplyBrush = () => {
     runVectorize(bgStrokes);
+    refreshMaskPreview(bgStrokes);
   };
 
   const handleDeleteRegion = (id: string) => {

@@ -45,12 +45,38 @@ export function BackgroundMaskBrush({ imageUri, strokes, onAddStroke, onClearStr
 
   const onLayout = useCallback((e: LayoutChangeEvent) => {
     setLayout({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height });
+    if (Platform.OS === 'web') {
+      refreshWebOffset();
+      return;
+    }
     const node = containerRef.current as unknown as {
       measure?: (cb: (x: number, y: number, w: number, h: number, pageX: number, pageY: number) => void) => void;
     } | null;
     node?.measure?.((_x, _y, _w, _h, pageX, pageY) => {
       pageOffsetRef.current = { x: pageX, y: pageY };
     });
+  }, []);
+
+  // Web-only: re-reads the stage's real viewport position via
+  // `getBoundingClientRect()` right before a drag starts, instead of
+  // trusting the one-time `measure()` snapshot taken at mount/layout time.
+  // `View.measure()`'s page offsets go stale the moment the page scrolls
+  // (this brush sits inside a scrollable wizard step), silently shifting
+  // every stroke away from the cursor by however far the page has
+  // scrolled since the initial layout -- the exact "brush strokes land in
+  // the wrong place" bug. `DesignRegionCropper`/`VectorRegionEditor` both
+  // already fix this the same way: `getBoundingClientRect()` (itself
+  // always viewport-relative and always current) paired with
+  // `clientX`/`clientY` (also viewport-relative) on every mouse event,
+  // rather than `pageX`/`pageY` (page-relative, i.e. it grows as the user
+  // scrolls down) paired with a `measure()` snapshot that doesn't.
+  const refreshWebOffset = useCallback(() => {
+    if (Platform.OS !== 'web') return;
+    const node = containerRef.current as unknown as {
+      getBoundingClientRect?: () => { left: number; top: number };
+    } | null;
+    const rect = node?.getBoundingClientRect?.();
+    if (rect) pageOffsetRef.current = { x: rect.left, y: rect.top };
   }, []);
 
   const toNormalized = useCallback(
@@ -84,16 +110,25 @@ export function BackgroundMaskBrush({ imageUri, strokes, onAddStroke, onClearStr
     [toNormalized]
   );
 
+  // Deliberately *not* done via `setLivePoints((prev) => { onAddStroke(prev); return null; })`:
+  // calling a prop that bubbles up to a parent's setState (`onAddStroke` ->
+  // `DigitizeWizardProvider`'s stroke list) from *inside* a state-updater
+  // function is a React purity violation -- updater functions can be
+  // invoked during React's render phase (e.g. React 18 Strict Mode replays
+  // them to check for impurity), so it manifested as a real console error:
+  // "Cannot update a component (DigitizeWizardProvider) while rendering a
+  // different component (BackgroundMaskBrush)". Reading `livePoints`
+  // directly in this handler (a real mouseup/responder-release event
+  // callback, not a render) and calling `onAddStroke` there instead is the
+  // correct fix.
   const endStroke = useCallback(() => {
     if (!drawingRef.current) return;
     drawingRef.current = false;
-    setLivePoints((prev) => {
-      if (prev && prev.length > 0) {
-        onAddStroke({ mode, radius: radius01, points: prev });
-      }
-      return null;
-    });
-  }, [mode, radius01, onAddStroke]);
+    if (livePoints && livePoints.length > 0) {
+      onAddStroke({ mode, radius: radius01, points: livePoints });
+    }
+    setLivePoints(null);
+  }, [mode, radius01, onAddStroke, livePoints]);
 
   const isWeb = Platform.OS === 'web';
   // `style` is deliberately kept out of this spread object and merged into
@@ -107,8 +142,11 @@ export function BackgroundMaskBrush({ imageUri, strokes, onAddStroke, onClearStr
   const webOnlyStyle: Record<string, unknown> = isWeb ? { cursor: 'crosshair' } : {};
   const webOnlyProps: Record<string, unknown> = isWeb
     ? {
-        onMouseDown: (e: any) => beginStroke(e.nativeEvent.pageX, e.nativeEvent.pageY),
-        onMouseMove: (e: any) => extendStroke(e.nativeEvent.pageX, e.nativeEvent.pageY),
+        onMouseDown: (e: any) => {
+          refreshWebOffset();
+          beginStroke(e.nativeEvent.clientX ?? e.nativeEvent.pageX, e.nativeEvent.clientY ?? e.nativeEvent.pageY);
+        },
+        onMouseMove: (e: any) => extendStroke(e.nativeEvent.clientX ?? e.nativeEvent.pageX, e.nativeEvent.clientY ?? e.nativeEvent.pageY),
         onMouseUp: endStroke,
         onMouseLeave: endStroke,
       }
@@ -152,12 +190,16 @@ export function BackgroundMaskBrush({ imageUri, strokes, onAddStroke, onClearStr
         ref={containerRef}
         style={[styles.stage, webOnlyStyle]}
         onLayout={onLayout}
-        onStartShouldSetResponder={() => true}
-        onMoveShouldSetResponder={() => true}
-        onResponderGrant={(e) => beginStroke(e.nativeEvent.pageX, e.nativeEvent.pageY)}
-        onResponderMove={(e) => extendStroke(e.nativeEvent.pageX, e.nativeEvent.pageY)}
-        onResponderRelease={endStroke}
-        onResponderTerminate={endStroke}
+        {...(isWeb
+          ? {}
+          : {
+              onStartShouldSetResponder: () => true,
+              onMoveShouldSetResponder: () => true,
+              onResponderGrant: (e: any) => beginStroke(e.nativeEvent.pageX, e.nativeEvent.pageY),
+              onResponderMove: (e: any) => extendStroke(e.nativeEvent.pageX, e.nativeEvent.pageY),
+              onResponderRelease: endStroke,
+              onResponderTerminate: endStroke,
+            })}
         {...webOnlyProps}
       >
         <Checkerboard />

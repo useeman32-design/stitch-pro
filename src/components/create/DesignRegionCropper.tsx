@@ -226,11 +226,15 @@ export function DesignRegionCropper({ imageUri, value, onChange, stageHeight = 3
         ref={containerRef}
         onLayout={onLayout}
         style={[styles.stage, { width: stageWidth, height: stageHeightFit }, webOnlyStyle]}
-        onStartShouldSetResponder={() => true}
-        onResponderGrant={(e) => beginDrag(e.nativeEvent.pageX, e.nativeEvent.pageY)}
-        onResponderMove={(e) => extendDrag(e.nativeEvent.pageX, e.nativeEvent.pageY)}
-        onResponderRelease={endDrag}
-        onResponderTerminate={endDrag}
+        {...(isWeb
+          ? {}
+          : {
+              onStartShouldSetResponder: () => true,
+              onResponderGrant: (e: any) => beginDrag(e.nativeEvent.pageX, e.nativeEvent.pageY),
+              onResponderMove: (e: any) => extendDrag(e.nativeEvent.pageX, e.nativeEvent.pageY),
+              onResponderRelease: endDrag,
+              onResponderTerminate: endDrag,
+            })}
         {...webOnlyProps}
       >
         <Image source={{ uri: imageUri }} style={StyleSheet.absoluteFill} resizeMode="contain" />

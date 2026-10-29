@@ -279,26 +279,36 @@ export function VectorRegionEditor({
     [screenToMm, longerSideMm]
   );
 
+  // Calls `onRedrawRegion`/`onAddRegion` (which bubble up to a parent's
+  // setState, e.g. the wizard's region list) directly in this handler --
+  // NOT from inside the `setLivePoints` updater function above, the way an
+  // earlier version of this (and BackgroundMaskBrush's analogous
+  // `endStroke`) did. A state-updater callback passed to `setState` can be
+  // invoked during React's render phase (React may replay it to check
+  // purity), so calling a parent-state-mutating prop from inside one is a
+  // real bug, not just a style nit -- it produced an actual console error,
+  // "Cannot update a component while rendering a different component".
+  // Reading `livePoints` directly here (this function only ever runs from
+  // a genuine mouseup/responder-release event) is the correct fix.
   const endDraw = useCallback(() => {
     if (!drawingRef.current || !drawMode) return;
     drawingRef.current = false;
-    setLivePoints((raw) => {
-      if (raw && raw.length >= MIN_POINTS_TO_ACCEPT) {
-        const simplified = simplifyPolyline(raw, longerSideMm * SIMPLIFY_EPSILON_MM_FRACTION);
-        if (simplified.length >= MIN_POINTS_TO_ACCEPT) {
-          const ring: VectorRegion['rings'][number] = simplified.map(([x, y]) => [x, y]);
-          const areaMm2 = polygonArea(simplified);
-          if (drawMode.kind === 'redraw') {
-            onRedrawRegion(drawMode.targetId, [ring], areaMm2);
-          } else {
-            onAddRegion({ colorHex: drawMode.colorHex, rings: [ring], areaMm2 });
-          }
+    const raw = livePoints;
+    if (raw && raw.length >= MIN_POINTS_TO_ACCEPT) {
+      const simplified = simplifyPolyline(raw, longerSideMm * SIMPLIFY_EPSILON_MM_FRACTION);
+      if (simplified.length >= MIN_POINTS_TO_ACCEPT) {
+        const ring: VectorRegion['rings'][number] = simplified.map(([x, y]) => [x, y]);
+        const areaMm2 = polygonArea(simplified);
+        if (drawMode.kind === 'redraw') {
+          onRedrawRegion(drawMode.targetId, [ring], areaMm2);
+        } else {
+          onAddRegion({ colorHex: drawMode.colorHex, rings: [ring], areaMm2 });
         }
       }
-      return null;
-    });
+    }
+    setLivePoints(null);
     setDrawMode(null);
-  }, [drawMode, longerSideMm, onRedrawRegion, onAddRegion]);
+  }, [drawMode, longerSideMm, onRedrawRegion, onAddRegion, livePoints]);
 
   const cancelDraw = () => {
     drawingRef.current = false;
@@ -450,12 +460,16 @@ export function VectorRegionEditor({
         ref={stageRef}
         style={[styles.stage, stageBoxSize, webCursorStyle]}
         onLayout={onLayout}
-        onStartShouldSetResponder={() => isDrawing || canPan}
-        onMoveShouldSetResponder={() => isDrawing || canPan}
-        onResponderGrant={(e) => handleGestureStart(e.nativeEvent.pageX, e.nativeEvent.pageY)}
-        onResponderMove={(e) => handleGestureMove(e.nativeEvent.pageX, e.nativeEvent.pageY)}
-        onResponderRelease={handleGestureEnd}
-        onResponderTerminate={handleGestureEnd}
+        {...(isWeb
+          ? {}
+          : {
+              onStartShouldSetResponder: () => isDrawing || canPan,
+              onMoveShouldSetResponder: () => isDrawing || canPan,
+              onResponderGrant: (e: any) => handleGestureStart(e.nativeEvent.pageX, e.nativeEvent.pageY),
+              onResponderMove: (e: any) => handleGestureMove(e.nativeEvent.pageX, e.nativeEvent.pageY),
+              onResponderRelease: handleGestureEnd,
+              onResponderTerminate: handleGestureEnd,
+            })}
         {...webOnlyProps}
       >
         {stageSize.width > 0 && (

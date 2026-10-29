@@ -1008,12 +1008,16 @@ export function EmbossedStitchCanvas({
       ref={stageRef}
       style={styles.wrap}
       onLayout={onLayout}
-      onStartShouldSetResponder={() => true}
-      onMoveShouldSetResponder={() => true}
-      onResponderGrant={onResponderGrant}
-      onResponderMove={onResponderMove}
-      onResponderRelease={onResponderRelease}
-      onResponderTerminate={onResponderRelease}
+      {...(isWeb
+        ? {}
+        : {
+            onStartShouldSetResponder: () => true,
+            onMoveShouldSetResponder: () => true,
+            onResponderGrant,
+            onResponderMove,
+            onResponderRelease,
+            onResponderTerminate: onResponderRelease,
+          })}
       {...webOnlyProps}
     >
       <Svg width="100%" height="100%" viewBox={effectiveViewBox}>
