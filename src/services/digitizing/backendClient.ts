@@ -215,6 +215,110 @@ export interface AnalyzeImageOptions {
    * automatic heuristic. Omit (or `false`) for the regular Auto Digitize
    * flow, which should keep relying on the automatic classifier. */
   forcePhoto?: boolean;
+  /** See `DesignRegionCrop` -- a normalized 0..1 box applied before
+   * anything else runs server-side. Only ever set from a crop the user
+   * already confirmed/adjusted on create/auto-digitize/design-region.tsx
+   * (see `detectDesignRegionViaBackend` below) -- never applied silently. */
+  crop?: DesignRegionCrop | null;
+}
+
+/**
+ * A normalized (0..1) crop box isolating just the printed/stitched design
+ * within a garment photo -- the "extract only the design from a photo of
+ * someone wearing the garment" requirement (brief: "when creating with
+ * realworld photo, example clothes on someone its suppose to detect it
+ * and extract only the design"). Matches stitchpro-backend's
+ * digitizer.segmentation.design_region.detect_design_region return shape
+ * and pipeline._apply_crop's input contract exactly, so a box round-trips
+ * unchanged between `detectDesignRegionViaBackend`'s suggestion and the
+ * `crop` field accepted by `vectorizeImageViaBackend`/`analyzeImageViaBackend`.
+ */
+export interface DesignRegionCrop {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface DesignRegionSuggestion extends DesignRegionCrop {
+  /** 0..1 -- see detect_design_region's own docstring for what drives
+   * this down (a heavily patterned garment, a low-contrast design, or the
+   * winning cluster covering most of the foreground). Callers should
+   * visibly flag a low-confidence suggestion rather than present it as
+   * certain. */
+  confidence: number;
+  /** `true` when the upload classified confidently as flat artwork (not a
+   * photo at all) -- callers should skip showing a crop-confirm step
+   * entirely in this case and just use the full image, since this
+   * detector is only meant for garment photos (see module docstring's
+   * acknowledged limitation on already-flat art). */
+  skip: boolean;
+  artworkKind: string;
+  artworkConfidence: number;
+}
+
+/**
+ * Asks the real backend to suggest a crop box isolating just the printed/
+ * stitched design within `imageUri` (stitchpro-backend's `POST /api/
+ * design/detect-region`) -- distinct from `removeBackgroundPreviewViaBackend`,
+ * which only strips *border-connected* surrounding material (a backdrop,
+ * a flat-lay's table) and does nothing for a photo of someone *wearing*
+ * the garment, where the shirt's own plain fabric (and skin/arms) fills
+ * most or all of the frame.
+ *
+ * Never applies anything itself -- this is purely a suggestion for
+ * create/auto-digitize/design-region.tsx to show as an adjustable crop
+ * overlay the user confirms or resizes, matching the same explicit-
+ * confirmation pattern `removeBackgroundPreviewViaBackend`'s own preview
+ * step already establishes. Returns `null` on any failure (backend
+ * disabled/unreachable/timeout/error) -- callers should treat that as "no
+ * suggestion available" and let the user continue with the full image
+ * (or their own manual crop) rather than blocking the wizard on it.
+ */
+export async function detectDesignRegionViaBackend(
+  imageUri: string,
+  options: { maxDim?: number; forcePhoto?: boolean } = {}
+): Promise<DesignRegionSuggestion | null> {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl || !imageUri) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+
+  try {
+    const imageResponse = await fetch(imageUri);
+    if (!imageResponse.ok) return null;
+    const blob = await imageResponse.blob();
+
+    const form = new FormData();
+    form.append('image', blob as any, 'artwork.png');
+    if (options.maxDim !== undefined) form.append('max_dim', String(options.maxDim));
+    if (options.forcePhoto !== undefined) form.append('force_photo', String(options.forcePhoto));
+
+    const response = await fetch(`${baseUrl}/api/design/detect-region`, {
+      method: 'POST',
+      body: form as any,
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (typeof data.x0 !== 'number') return null;
+
+    return {
+      x0: data.x0,
+      y0: data.y0,
+      x1: data.x1,
+      y1: data.y1,
+      confidence: data.confidence ?? 0,
+      skip: Boolean(data.skip),
+      artworkKind: data.artworkKind ?? 'photo',
+      artworkConfidence: data.artworkConfidence ?? 0,
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** Converts a `Blob` into a `data:` URI -- works identically on web and
@@ -254,7 +358,8 @@ function blobToDataUri(blob: Blob): Promise<string> {
  */
 export async function removeBackgroundPreviewViaBackend(
   imageUri: string,
-  maxDim?: number
+  maxDim?: number,
+  crop?: DesignRegionCrop | null
 ): Promise<string | null> {
   const baseUrl = getBackendUrl();
   if (!baseUrl || !imageUri) return null;
@@ -270,6 +375,7 @@ export async function removeBackgroundPreviewViaBackend(
     const form = new FormData();
     form.append('image', blob as any, 'artwork.png');
     if (maxDim !== undefined) form.append('max_dim', String(maxDim));
+    if (crop) form.append('crop', JSON.stringify(crop));
 
     const response = await fetch(`${baseUrl}/api/design/remove-background`, {
       method: 'POST',
@@ -319,6 +425,7 @@ export async function analyzeImageViaBackend(
     if (options.borderWidthMm !== undefined) form.append('border_width_mm', String(options.borderWidthMm));
     if (options.removeBackground !== undefined) form.append('remove_background', String(options.removeBackground));
     if (options.forcePhoto !== undefined) form.append('force_photo', String(options.forcePhoto));
+    if (options.crop) form.append('crop', JSON.stringify(options.crop));
 
     const response = await fetch(`${baseUrl}/api/design/image-to-points`, {
       method: 'POST',
@@ -571,6 +678,8 @@ export async function vectorizeImageViaBackend(
     bgStrokes?: BgStroke[];
     /** See `AnalyzeImageOptions.forcePhoto` -- same meaning here. */
     forcePhoto?: boolean;
+    /** See `AnalyzeImageOptions.crop` -- same meaning here. */
+    crop?: DesignRegionCrop | null;
   } = {}
 ): Promise<VectorizeResult | null> {
   const baseUrl = getBackendUrl();
@@ -595,6 +704,7 @@ export async function vectorizeImageViaBackend(
     if (options.autoVectorize !== undefined) form.append('auto_vectorize', String(options.autoVectorize));
     if (options.bgStrokes && options.bgStrokes.length) form.append('bg_strokes', JSON.stringify(options.bgStrokes));
     if (options.forcePhoto !== undefined) form.append('force_photo', String(options.forcePhoto));
+    if (options.crop) form.append('crop', JSON.stringify(options.crop));
 
     const response = await fetch(`${baseUrl}/api/design/vectorize`, {
       method: 'POST',

@@ -105,6 +105,7 @@ export default function DesignSettingsScreen() {
     vectorRegions,
     vectorRegionsSizeMm,
     sourceMode,
+    designRegionCrop,
   } = useDigitizeWizard();
   const forcePhoto = sourceMode === 'embroidered_photo';
   const [threads, setThreads] = useState<ThreadColor[]>([]);
@@ -220,6 +221,12 @@ export default function DesignSettingsScreen() {
             borderWidthMm: resolveBorderWidthMm(settings),
             removeBackground,
             forcePhoto,
+            // Raw-image fallback path (only used if vectorize.tsx's own
+            // backend call never ran/failed, so `vectorRegions` is still
+            // null) -- must still respect whatever crop the user confirmed
+            // on design-region.tsx, since that crop was never baked into
+            // `artwork.uri` itself.
+            crop: designRegionCrop,
           })
         : null;
 

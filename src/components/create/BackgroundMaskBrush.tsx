@@ -96,13 +96,21 @@ export function BackgroundMaskBrush({ imageUri, strokes, onAddStroke, onClearStr
   }, [mode, radius01, onAddStroke]);
 
   const isWeb = Platform.OS === 'web';
+  // `style` is deliberately kept out of this spread object and merged into
+  // the stage View's own `style` *array* instead (see `webOnlyStyle` at the
+  // JSX below) -- spreading `{...webOnlyProps}` after `style={styles.stage}`
+  // would otherwise let this object's own `style` key silently replace
+  // (not merge with) `styles.stage` entirely, discarding its fixed
+  // `height: 280` and collapsing the whole brush canvas to 0 height on web
+  // (same class of bug DesignRegionCropper's own `webOnlyStyle` comment
+  // documents -- see that component for the full story).
+  const webOnlyStyle: Record<string, unknown> = isWeb ? { cursor: 'crosshair' } : {};
   const webOnlyProps: Record<string, unknown> = isWeb
     ? {
         onMouseDown: (e: any) => beginStroke(e.nativeEvent.pageX, e.nativeEvent.pageY),
         onMouseMove: (e: any) => extendStroke(e.nativeEvent.pageX, e.nativeEvent.pageY),
         onMouseUp: endStroke,
         onMouseLeave: endStroke,
-        style: { cursor: 'crosshair' },
       }
     : {};
 
@@ -142,7 +150,7 @@ export function BackgroundMaskBrush({ imageUri, strokes, onAddStroke, onClearStr
 
       <View
         ref={containerRef}
-        style={styles.stage}
+        style={[styles.stage, webOnlyStyle]}
         onLayout={onLayout}
         onStartShouldSetResponder={() => true}
         onMoveShouldSetResponder={() => true}

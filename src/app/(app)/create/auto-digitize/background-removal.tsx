@@ -70,11 +70,14 @@ export default function BackgroundRemovalScreen() {
 
   const handleContinue = () => {
     setRemoveBackground(choice === 'removed');
-    // The next step traces whichever image the user just picked into a
-    // real, editable vector and lets them fix the mask/shapes by hand --
-    // see create/auto-digitize/vectorize.tsx. It fails soft on its own if
-    // the backend is unreachable, so it's always safe to route there.
-    router.push('/create/auto-digitize/vectorize');
+    // The next step looks for just the printed/stitched design within
+    // whichever image the user just picked -- the "photo of someone
+    // wearing the garment" case, where the shirt/skin fills the frame and
+    // background removal alone (above) can't isolate the design itself.
+    // See create/auto-digitize/design-region.tsx; it fails soft and
+    // auto-skips itself for already-flat artwork, so it's always safe to
+    // route there next.
+    router.push('/create/auto-digitize/design-region');
   };
 
   return (

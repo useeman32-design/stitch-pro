@@ -7,7 +7,7 @@ import {
   type StitchPlanSummary,
 } from '@/services/digitizing';
 import type { DstPoint } from '@/utils/dstWriter';
-import type { BgStroke, VectorRegion } from '@/services/digitizing/backendClient';
+import type { BgStroke, DesignRegionCrop, VectorRegion } from '@/services/digitizing/backendClient';
 
 export interface UploadedArtwork {
   uri: string;
@@ -85,6 +85,17 @@ interface DigitizeWizardValue {
    * a settings change) doesn't lose them. */
   bgStrokes: BgStroke[];
   setBgStrokes: (strokes: BgStroke[]) => void;
+  /** The crop box the user confirmed/adjusted on create/auto-digitize/
+   * design-region.tsx -- the "extract only the design from a photo of
+   * someone wearing the garment" requirement. `null` means "use the full
+   * image" (either the detector found nothing worth cropping, the upload
+   * was flat artwork that step skipped itself for, or the user explicitly
+   * chose not to crop). Threaded into every backend call that accepts a
+   * `crop` field (vectorize, and the raw image-to-points/image-to-file
+   * fallback path) so a vectorize outage doesn't silently re-digitize the
+   * whole uncropped photo instead of respecting this choice. */
+  designRegionCrop: DesignRegionCrop | null;
+  setDesignRegionCrop: (crop: DesignRegionCrop | null) => void;
   setArtwork: (artwork: UploadedArtwork) => void;
   clearArtwork: () => void;
   setAnalysis: (analysis: AnalysisResult) => void;
@@ -113,6 +124,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
   const [vectorRegions, setVectorRegionsState] = useState<VectorRegion[] | null>(null);
   const [vectorRegionsSizeMm, setVectorRegionsSizeMmState] = useState<{ width: number; height: number } | null>(null);
   const [bgStrokes, setBgStrokesState] = useState<BgStroke[]>([]);
+  const [designRegionCrop, setDesignRegionCropState] = useState<DesignRegionCrop | null>(null);
 
   const setVectorRegions = useCallback(
     (regions: VectorRegion[] | null, sizeMm?: { width: number; height: number }) => {
@@ -162,6 +174,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
     setVectorRegionsState(null);
     setVectorRegionsSizeMmState(null);
     setBgStrokesState([]);
+    setDesignRegionCropState(null);
   }, []);
 
   const value = useMemo(
@@ -183,6 +196,8 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       setVectorRegions,
       bgStrokes,
       setBgStrokes: setBgStrokesState,
+      designRegionCrop,
+      setDesignRegionCrop: setDesignRegionCropState,
       setArtwork: setArtworkState,
       clearArtwork: () => {
         setArtworkState(null);
@@ -190,6 +205,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
         setVectorRegionsState(null);
         setVectorRegionsSizeMmState(null);
         setBgStrokesState([]);
+        setDesignRegionCropState(null);
       },
       setAnalysis,
       updateSettings,
@@ -215,6 +231,7 @@ export function DigitizeWizardProvider({ children }: { children: React.ReactNode
       vectorRegionsSizeMm,
       setVectorRegions,
       bgStrokes,
+      designRegionCrop,
       setAnalysis,
       updateSettings,
       addThreadColor,

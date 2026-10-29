@@ -37,8 +37,17 @@ type Tab = 'background' | 'regions';
  */
 export default function VectorizeScreen() {
   const router = useRouter();
-  const { artwork, settings, removeBackground, vectorRegions, setVectorRegions, bgStrokes, setBgStrokes, sourceMode } =
-    useDigitizeWizard();
+  const {
+    artwork,
+    settings,
+    removeBackground,
+    vectorRegions,
+    setVectorRegions,
+    bgStrokes,
+    setBgStrokes,
+    sourceMode,
+    designRegionCrop,
+  } = useDigitizeWizard();
   const forcePhoto = sourceMode === 'embroidered_photo';
   // Trace at whatever design size is currently in effect (defaults to
   // 90x90mm until the user visits Settings) -- if they later pick a
@@ -62,6 +71,7 @@ export default function VectorizeScreen() {
         removeBackground,
         bgStrokes: strokes,
         forcePhoto,
+        crop: designRegionCrop,
       });
       if (result) {
         setRegions(result.regions);
@@ -71,7 +81,7 @@ export default function VectorizeScreen() {
       }
       setLoading(false);
     },
-    [artwork, removeBackground, forcePhoto]
+    [artwork, removeBackground, forcePhoto, designRegionCrop]
   );
 
   useEffect(() => {
@@ -83,7 +93,11 @@ export default function VectorizeScreen() {
     // is actually in play -- "keep original" has no mask to brush-correct
     // against in the usual sense, though erase strokes can still knock out
     // a stray bit by hand (see BackgroundMaskBrush/apply_mask_strokes).
-    removeBackgroundPreviewViaBackend(artwork.uri).then(setMaskPreviewUri);
+    // Previewed against the same user-confirmed design-region crop (see
+    // create/auto-digitize/design-region.tsx) the real vectorize call
+    // below uses, so the mask the user brushes against actually matches
+    // what gets processed.
+    removeBackgroundPreviewViaBackend(artwork.uri, undefined, designRegionCrop ?? undefined).then(setMaskPreviewUri);
     runVectorize(bgStrokes);
     // Deliberately runs once per artwork -- re-vectorizing on every brush
     // stroke happens explicitly via the "Apply Brush Edits" button below,

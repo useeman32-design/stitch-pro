@@ -4,7 +4,7 @@ import { analyzeImageViaBackend, regionsToPointsViaBackend } from '@/services/di
 import { analyzeImage, buildStitchSegments, resolveImageUri } from '@/utils/stitchEngine';
 import { gridSegmentsToMm, pointsToMmSegments, type MmSegment } from '@/utils/stitchPreview';
 import type { DstPoint } from '@/utils/dstWriter';
-import type { StitchTypeBreakdownEntry, VectorRegion } from '@/services/digitizing/backendClient';
+import type { DesignRegionCrop, StitchTypeBreakdownEntry, VectorRegion } from '@/services/digitizing/backendClient';
 
 export type StitchPreviewSource = 'backend' | 'client' | 'none';
 
@@ -88,7 +88,13 @@ export function useStitchPreview(
    * once real regions exist. Pass `true` for the "Photo of Embroidery"
    * entry point (create/index.tsx), same as every other backend call in
    * that wizard. */
-  forcePhoto?: boolean
+  forcePhoto?: boolean,
+  /** See `AnalyzeImageOptions.crop` -- only affects the raw-image
+   * `analyzeImageViaBackend` fallback branch below, same reasoning as
+   * `forcePhoto` above: once real `regions` exist they were already
+   * traced from the cropped sub-image (see create/auto-digitize/
+   * vectorize.tsx), so this has no further effect in that case. */
+  crop?: DesignRegionCrop | null
 ): StitchPreviewResult {
   const uri = resolveImageUri(source);
   const hasRegions = !!(regions && regions.length);
@@ -118,6 +124,7 @@ export function useStitchPreview(
             stitchLengthMm,
             borderWidthMm,
             forcePhoto,
+            crop,
           });
 
       if (cancelled) return;
@@ -189,6 +196,7 @@ export function useStitchPreview(
     borderWidthMm,
     regions,
     forcePhoto,
+    crop,
   ]);
 
   if (!uri && !hasRegions) {
