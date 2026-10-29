@@ -1,6 +1,15 @@
 # StitchPro — Handoff / Continuation Notes
 
-_Last updated: 2026-10-28 (New stitch types — Appliqué, 3D Puff, Bean,
+_Last updated: 2026-10-29 (Final exhaustive QA pass on Issue 1 — garment-
+photo design extraction + the Fix-Background mask-preview-refresh fix —
+requested by the user as their last test before accepting the feature.
+Live-verified the full wizard end-to-end for all 3 example images, found
+and fixed 2 real bugs (a setState-during-render React warning, and the
+mask preview genuinely not refreshing after brush edits), plus cleaned up
+a class of benign-but-noisy console warnings. See the dedicated session
+entry right before §6._
+
+_Previously updated: 2026-10-28 (New stitch types — Appliqué, 3D Puff, Bean,
 Motif — shipped end-to-end across both repos; see the dedicated session
 entry right before §6)._
 
@@ -781,6 +790,125 @@ and restarted at least 4 times over the course of this session's live
 verification; this remains a standing constraint of the sandbox (1.9GB
 RAM, no swap) -- keep live-browser checks lean and re-check
 `free -h`/process liveness before each one.
+
+---
+
+### Session: final exhaustive QA pass on Issue 1 (2026-10-29)
+
+The user explicitly asked for one last, thorough, *live-browser-driven*
+re-test of the whole garment-photo-extraction + mask-brush-correction flow
+before accepting it -- not just re-showing old screenshots. Wrote
+`/home/user/full_flow_test.py`, a Playwright script that drives the full
+wizard (upload -> background-removal -> design-region (crop-drag) ->
+vectorize (Fix Background brush + Apply, Edit Shapes) -> analyzing ->
+settings -> preview -> download) for all 3 bundled example images
+(tshirt/hoodie/flat-logo), capturing a screenshot at every step plus every
+browser console error. **Found and fixed 4 real bugs**, confirmed a 5th
+thing was *not* a bug, and got a fully clean run (zero functional errors)
+across all 3 images by the end.
+
+**Real bug #1 -- the actual regression this QA pass was meant to verify:**
+`handleApplyBrush` in `vectorize.tsx` only re-ran `runVectorize` (the real
+shape-tracing call); it never refreshed `maskPreviewUri`, so the
+Fix-Background brush's own preview image stayed stale after clicking
+"Apply Brush Edits" even though the final traced regions really were
+correct underneath. Fixed by adding `refreshMaskPreview(strokes)` (calls
+`removeBackgroundPreviewViaBackend(..., bgStrokes)`, a new backend param --
+see the backend's own continue.md section) and wiring it into both
+`handleApplyBrush` and `handleClearStrokes`. **Verified, not just assumed
+fixed**: read the actual `<img>` element's `src` (a `data:image/png;base64,...`
+URI) before and after clicking Apply via `page.evaluate` -- confirmed a
+different hash (same byte length) after Apply, i.e. the backend really is
+being re-queried and the preview really does change. (A naive full-page
+pixel-diff approach was tried first and rejected -- it couldn't distinguish
+"the real mask image updated" from "the stroke-indicator SVG overlay that
+always renders for every stroke regardless of mask-refresh" -- the `<img
+src>` hash check is the real proof.)
+
+**Real bug #2 -- a genuine React correctness bug, not just noise:**
+`BackgroundMaskBrush.endStroke` and `VectorRegionEditor.endDraw` both called
+a parent-state-mutating prop (`onAddStroke` / `onAddRegion` / `onRedrawRegion`)
+*from inside* a `setLivePoints((prev) => { ...call the prop...; return null; })`
+updater function. State-updater functions can be replayed during React's
+render phase (e.g. Strict Mode does this to check purity), so this produced
+a real, reproducible console error: `"Cannot update a component
+(DigitizeWizardProvider) while rendering a different component
+(BackgroundMaskBrush)"`. Fixed in both components by reading the live
+points directly in the event-handler body instead of inside the updater.
+Confirmed gone via a live repro script (fired reliably before the fix,
+zero occurrences after, across multiple repeated runs).
+
+**Real bug #3 (cosmetic, but user-visible as an error toast) -- noisy but
+otherwise-harmless console warnings:** `BackgroundMaskBrush`,
+`DesignRegionCropper`, `VectorRegionEditor`, `EmbossedStitchCanvas`, and
+`Slider` all unconditionally included native-only responder props
+(`onStartShouldSetResponder`/`onResponderGrant`/`Move`/`Release`/`Terminate`)
+even on web, where react-native-web ignores them and logs `"Unknown event
+handler property ... It will be ignored"` for each one -- these components
+already have a fully-working web-only `onMouseDown`/`Move`/`Up` path, so the
+native props were pure dead weight on web. Fixed by gating them behind
+`!isWeb` in all 5 components. This measurably reduced console noise but did
+**not** eliminate it entirely -- see the next paragraph.
+
+**Confirmed not a bug (after a real investigation, not just an assumption):**
+A residual, unavoidable set of the same 6 "Unknown event handler property"
+warnings (`onStartShouldSetResponder`, `onResponderTerminationRequest`,
+`onResponderGrant`, `onResponderMove`, `onResponderRelease`,
+`onResponderTerminate`) still appears once per screen, *after* all 5 of this
+app's own components were fixed. Root-caused via `console.error`
+monkey-patching + stack capture (inconclusive -- React's prop-validation
+warning fires several frames deep in `completeWork`, after the originating
+component's own call frame has already returned, so JS stack traces don't
+point back to app code) and then via `grep`ping `node_modules/react-native-web`
+directly: `node_modules/react-native-web/dist/exports/Pressable`'s own
+internal `PressResponder` implementation (used by every `Pressable` in this
+app -- i.e. every `Button`/`Chip`/`Card`) attaches exactly these 6 prop
+names as part of its own internal gesture plumbing, completely independent
+of any app code. This is a react-native-web library-internal quirk/legacy
+code path, not something this app's source controls -- not fixed (would
+require patching or upgrading the `react-native-web` dependency, out of
+scope for this pass), but definitively **confirmed benign**: it never
+blocked, stalled, or broke any interaction in dozens of live runs.
+
+**Real bug #4 (test-script bug, not an app bug) -- design-region auto-skip
+race:** confidently-flat uploads (e.g. the flat-logo example) get
+`skip: true` from the backend detector and `design-region.tsx` auto-fires
+`router.replace('/create/auto-digitize/vectorize')` -- correct, intended
+behavior (see `design-region.tsx`'s own `skip` docstring). The original
+`full_flow_test.py` assumed that once it observed the design-region screen,
+it would stay there until a manual "Continue to Vectorize" click -- for
+flat art the auto-skip redirect could fire *during* the test's own
+settle-wait, leaving it clicking/waiting for a button that no longer
+existed (`FAILED: flatlogo: Locator.wait_for: Timeout 45000ms exceeded`).
+Fixed by re-checking `page.locator("text=Find the Design >> visible=true").count()`
+right before each subsequent action on that screen and gracefully treating
+an already-redirected page as "skipped", same as the direct-skip case.
+
+**Real bug #5 (test-script bug, not an app bug) -- premature click on a
+still-disabled "Continue to Analysis":** `handleApplyBrush` kicks off a
+real `runVectorize` backend re-trace (sets `loading=true`, which disables
+"Continue to Analysis" and shows a `"Tracing your artwork into editable
+shapes…"` card) -- for the more complex hoodie example this legitimately
+took ~5s, longer than the test's original fixed 3.5s wait, so the test
+clicked a visually-dimmed-but-still-DOM-"enabled"-per-Playwright button
+while the app's own `continueDisabled={loading}` was still `true`, landing
+a totally silent no-op click (no navigation, no error) -- same root-cause
+category as the earlier-fixed "Continue to Settings" premature-click bug
+on the Analyzing screen. Fixed by waiting for the actual
+`"Tracing your artwork"` loading card to disappear (the real state signal)
+before proceeding, not a fixed delay.
+
+**Final verified state**: all 3 example images (tshirt, hoodie, flat logo)
+complete the entire wizard end-to-end with zero functional errors and zero
+non-benign console errors, confirmed via `/home/user/full_flow_test.py`
+(screenshots + `console_errors.json` in `/home/user/screenshots2/`, not
+part of this repo -- regenerate by re-running the script if needed). Full
+backend test suite: 316 passed, no regressions. `npx tsc --noEmit`: 0
+errors. Both repos hit the known git-HEAD-drift issue again this session
+(local HEAD ~5-20 commits behind `origin/main` despite the working tree
+being current) -- recovered via the documented `git fetch` + diff-against-
+origin + `git reset --hard origin/main` + reapply-as-patch procedure (§3)
+without losing any work.
 
 ---
 
