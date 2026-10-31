@@ -265,6 +265,15 @@ export default function DesignPreviewScreen() {
               </>
             )}
           </View>
+          {activeSim.source !== 'none' && (
+            <View style={styles.engineRow}>
+              <Badge
+                label={activeSim.source === 'backend' ? 'Python Backend' : 'Local JS Fallback'}
+                tone={activeSim.source === 'backend' ? 'success' : 'warning'}
+                dot
+              />
+            </View>
+          )}
           <View style={styles.qualityRow}>
             <ShieldCheck size={16} color={colors.success} />
             <Text style={[typography.bodySmall, { color: colors.textSecondary }]}>
@@ -396,6 +405,11 @@ const styles = StyleSheet.create({
   statsCol: {},
   statsColDesktop: {
     flex: 1,
+  },
+  engineRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: spacing.sm,
   },
   qualityRow: {
     flexDirection: 'row',

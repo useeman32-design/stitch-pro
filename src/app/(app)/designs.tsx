@@ -199,7 +199,8 @@ export default function DesignsScreen() {
                       active.name.replace(/\.[^/.]+$/, '') || 'design'
                     );
                     if (result.ok) {
-                      show(`${result.filename} downloaded — a real, machine-readable file.`, 'success');
+                      const via = result.engine === 'backend' ? 'Python Backend' : 'Local Fallback';
+                      show(`${result.filename} downloaded via ${via} — a real, machine-readable file.`, 'success');
                     } else if (result.reason === 'backend-unreachable') {
                       show(`Couldn't reach the StitchPro backend to generate ${active.format} right now.`, 'error');
                     } else {

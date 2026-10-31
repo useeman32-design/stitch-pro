@@ -41,12 +41,65 @@ import type { DstPoint } from '@/utils/dstWriter';
  */
 export const DEFAULT_BACKEND_URL = '';
 
-export function getBackendUrl(): string {
+/** The URL most testers actually want when they turn the backend on --
+ * shown as the Settings screen's placeholder/default suggestion only. Not
+ * a production value and never assigned to `DEFAULT_BACKEND_URL` above:
+ * a real deployed backend's URL is an explicit per-environment choice the
+ * user makes (see the Settings > Backend Connection section), never
+ * something this file should assume. */
+export const LOCAL_DEV_BACKEND_URL = 'http://localhost:5050';
+
+/** The one `localStorage` key this whole override mechanism reads/writes --
+ * exported so the Settings UI and this module never risk drifting apart on
+ * the literal key name. */
+export const BACKEND_URL_STORAGE_KEY = 'stitchpro_backend_url';
+
+function readStoredBackendUrl(): string {
   if (typeof window !== 'undefined' && window.localStorage) {
-    const override = window.localStorage.getItem('stitchpro_backend_url');
-    if (override) return override.replace(/\/+$/, '');
+    return (window.localStorage.getItem(BACKEND_URL_STORAGE_KEY) || '').trim();
   }
+  return '';
+}
+
+/** The effective backend URL every real API call in this file actually
+ * uses: the user's saved override if one exists, else `DEFAULT_BACKEND_URL`
+ * (empty/disabled, so every call below fails soft and callers fall back to
+ * the local JS pipeline). */
+export function getBackendUrl(): string {
+  const override = readStoredBackendUrl();
+  if (override) return override.replace(/\/+$/, '');
   return DEFAULT_BACKEND_URL.replace(/\/+$/, '');
+}
+
+/** Exactly what the user explicitly configured (empty string if nothing
+ * saved yet) -- distinct from `getBackendUrl()`, which also folds in the
+ * `DEFAULT_BACKEND_URL` fallback. Used by the Settings screen to show/
+ * prefill only a real, user-chosen value, never a silently-assumed one. */
+export function getConfiguredBackendUrl(): string {
+  return readStoredBackendUrl();
+}
+
+/** Saves `url` as the backend override persistently (Settings > Backend
+ * Connection > Save). Only ever called after the user explicitly asks to
+ * save/connect -- never silently on app start. Web-only today (matches
+ * every other read/write of this key in this file); see this function's
+ * own "native" note below for why that's an existing, documented limit
+ * rather than a regression introduced here. */
+export function setBackendUrl(url: string): void {
+  const trimmed = url.trim().replace(/\/+$/, '');
+  if (typeof window !== 'undefined' && window.localStorage) {
+    if (trimmed) window.localStorage.setItem(BACKEND_URL_STORAGE_KEY, trimmed);
+    else window.localStorage.removeItem(BACKEND_URL_STORAGE_KEY);
+  }
+}
+
+/** Disconnects / reverts to the local JavaScript fallback: clears the
+ * saved override so `getBackendUrl()` goes back to `DEFAULT_BACKEND_URL`
+ * (empty, i.e. backend calls disabled) on every subsequent call. */
+export function clearBackendUrl(): void {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    window.localStorage.removeItem(BACKEND_URL_STORAGE_KEY);
+  }
 }
 
 export type BackendFormat = 'dst' | 'pes' | 'jef' | 'vp3' | 'exp';
@@ -105,13 +158,16 @@ export async function exportViaBackend(
 }
 
 /** Quick liveness probe, used only to decide whether to show the user a
- * "connected to backend" style hint — never required for exports to work. */
-export async function isBackendReachable(): Promise<boolean> {
-  const baseUrl = getBackendUrl();
+ * "connected to backend" style hint — never required for exports to work.
+ * Pass `urlOverride` to test a candidate URL the user hasn't saved yet
+ * (Settings > Backend Connection > Test Connection); omit it to check
+ * whatever is currently configured (`getBackendUrl()`'s effective value). */
+export async function isBackendReachable(urlOverride?: string): Promise<boolean> {
+  const baseUrl = (urlOverride ?? getBackendUrl()).trim().replace(/\/+$/, '');
   if (!baseUrl) return false;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 3000);
+    const timeout = setTimeout(() => controller.abort(), 5000);
     const response = await fetch(`${baseUrl}/api/health`, { signal: controller.signal });
     clearTimeout(timeout);
     return response.ok;

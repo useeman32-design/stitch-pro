@@ -217,6 +217,15 @@ export default function SimulatorScreen() {
                 threadThicknessScale={threadThicknessScale}
               />
             )}
+            {sim.source !== 'none' && !sim.loading && (
+              <View style={styles.engineBadge}>
+                <Badge
+                  label={sim.source === 'backend' ? 'Python Backend' : 'Local JS Fallback'}
+                  tone={sim.source === 'backend' ? 'success' : 'warning'}
+                  dot
+                />
+              </View>
+            )}
             {progress >= 1 && (
               <View style={styles.completeBadge}>
                 <Badge label="Stitch-out complete" tone="success" />
@@ -449,6 +458,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: spacing.sm,
     right: spacing.sm,
+  },
+  engineBadge: {
+    position: 'absolute',
+    top: spacing.sm,
+    left: spacing.sm,
   },
   inspectHint: {
     position: 'absolute',

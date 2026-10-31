@@ -31,7 +31,7 @@ export function triggerBlobDownload(blob: Blob, filename: string): void {
 }
 
 export type DownloadStitchFileResult =
-  | { ok: true; filename: string }
+  | { ok: true; filename: string; engine: 'backend' | 'client' }
   | { ok: false; reason: 'no-points' | 'unsupported-format' | 'backend-unreachable' | 'write-failed' };
 
 /**
@@ -56,7 +56,7 @@ export async function downloadStitchFile(
     if (blob) {
       const filename = `${baseName}.${backendFormat}`;
       triggerBlobDownload(blob, filename);
-      return { ok: true, filename };
+      return { ok: true, filename, engine: 'backend' };
     }
   }
 
@@ -69,7 +69,7 @@ export async function downloadStitchFile(
     const blob = new Blob([bytes.buffer as ArrayBuffer], { type: 'application/octet-stream' });
     const filename = `${baseName}.dst`;
     triggerBlobDownload(blob, filename);
-    return { ok: true, filename };
+    return { ok: true, filename, engine: 'client' };
   } catch {
     return { ok: false, reason: 'write-failed' };
   }

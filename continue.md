@@ -1401,3 +1401,49 @@ behavior, not a bug). Full click-through of the detect-region call
 itself isn't exercisable against the static Pages deploy (no live
 backend there) -- same known, accepted loopback/CORS limitation as every
 other backend-dependent flow in this app's production deploy.
+
+## Milestone 2 — Backend Connection & Engine Visibility (this session)
+
+Closed the long-standing gap (documented earlier in this file at the
+"Deployed to GitHub Pages" note and elsewhere) where `DEFAULT_BACKEND_URL`
+being `''` meant testers had to manually run
+`localStorage.setItem('stitchpro_backend_url', 'http://localhost:5050')`
+in the browser console. Added a **"Backend Connection" card to the
+existing Settings screen** (no new screen): URL input (placeholder
+suggests `http://localhost:5050`, never hardcoded as a production
+default), Test Connection (probes a candidate URL without saving, via
+`isBackendReachable(urlOverride)`), Save & Connect / Disconnect,
+live Connected/Disconnected badge, and an Active-URL readout.
+`backendClient.ts` gained `getConfiguredBackendUrl()` / `setBackendUrl()`
+/ `clearBackendUrl()` around the existing `localStorage` key.
+
+Also added visible engine badges ("Python Backend" vs "Local JS
+Fallback") to `preview.tsx`, `success.tsx` ("Via Python Backend" / "Via
+Local Fallback", only shown after a real download succeeds), and
+`simulator.tsx`, plus an engine-aware download toast on `designs.tsx`.
+`downloadStitchFile()`'s success result now carries `engine: 'backend' |
+'client'` set only from which code path actually ran.
+
+**Runtime-verified end-to-end via Playwright against the real exported
+web build + a real running Flask backend** (not mocked, not hit
+directly): full Auto Digitize wizard run (Monogram M sample) with Flask
+up showed "PYTHON BACKEND"/"Via Python Backend" badges and a real
+37,118-stitch DST download; the identical flow with Flask killed showed
+"LOCAL JS FALLBACK"/"Via Local Fallback" badges, fail-soft notices on the
+background-removal/vectorize steps, and a genuinely different (simpler,
+2,331-stitch) local result -- confirming the app never claims the Python
+engine ran unless it actually did. Full report:
+`StitchPro_Milestone2_BackendConnection_EngineVisibility.md` (delivered
+outside this repo, in the audit workspace).
+
+Reviewed all 13 backend routes: 8 wired (health, points-to-file,
+detect-region, image-to-points, remove-background, text-to-points,
+vectorize, regions-to-points), 5 deliberately left unwired (`/api/formats`
+-- frontend hardcodes its own format list; `line-to-dst` -- legacy,
+superseded by the points-stream path; `image-to-file`/`text-to-file`/
+`regions-to-file` -- all redundant with the `*-to-points` -> `points-to-file`
+two-step path the wizard's Preview step depends on).
+
+Full backend test suite re-run with no backend changes: 328/328 passing.
+Frontend merge/geometry scripts: 37/37 passing. `tsc`/`eslint`/`expo
+export -p web` all clean.

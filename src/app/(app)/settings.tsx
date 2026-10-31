@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Sparkles, LogOut, Trash2 } from 'lucide-react-native';
+import { Sparkles, LogOut, Trash2, Server, Wifi, WifiOff } from 'lucide-react-native';
 import { colors, radius, spacing, typography } from '@/theme';
 import { ScreenContainer } from '@/components/layout/ScreenContainer';
 import { Card } from '@/components/ui/Card';
@@ -17,6 +17,13 @@ import { useToast } from '@/components/ui/Toast';
 import { useResponsive } from '@/hooks/useResponsive';
 import { authService } from '@/services/auth';
 import type { StitchFormat, User } from '@/services/types';
+import {
+  LOCAL_DEV_BACKEND_URL,
+  clearBackendUrl,
+  getConfiguredBackendUrl,
+  isBackendReachable,
+  setBackendUrl,
+} from '@/services/digitizing/backendClient';
 
 const formats: StitchFormat[] = ['DST', 'PES', 'JEF', 'EXP', 'VP3', 'HUS'];
 const hoopSizes = ['100x100', '120x180', '130x180', '140x200', '300x200', '360x200'];
@@ -36,6 +43,85 @@ export default function SettingsScreen() {
   const [notifyWeekly, setNotifyWeekly] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // --- Backend Connection (see backendClient.ts) ------------------------
+  // `savedBackendUrl` mirrors exactly what `getBackendUrl()` resolves to
+  // for every real API call elsewhere in the app -- this screen never
+  // keeps its own separate notion of "the backend" that could drift from
+  // what's actually used. `connected` only ever flips to `true` after a
+  // real `GET /api/health` request succeeds (`isBackendReachable`); it is
+  // never assumed from the mere presence of a saved URL.
+  // Lazy initializers read the already-persisted config synchronously (a
+  // plain localStorage read, see backendClient.ts) so the screen never
+  // needs an effect just to mirror state that's already known at mount --
+  // only the *async* reachability re-check below needs one.
+  const [backendUrlInput, setBackendUrlInput] = useState(() => getConfiguredBackendUrl() || LOCAL_DEV_BACKEND_URL);
+  const [savedBackendUrl, setSavedBackendUrl] = useState(() => getConfiguredBackendUrl());
+  // `null` means "not yet confirmed" (a saved URL exists but the live
+  // re-check below hasn't resolved yet) -- never assumed `true` just
+  // because a URL is saved; `false` when nothing is saved at all.
+  const [connected, setConnected] = useState<boolean | null>(() => (getConfiguredBackendUrl() ? null : false));
+  const [checkingConnection, setCheckingConnection] = useState(() => !!getConfiguredBackendUrl());
+  const [testResult, setTestResult] = useState<'reachable' | 'unreachable' | null>(null);
+
+  useEffect(() => {
+    // Re-validate the already-saved backend on screen load so the
+    // Connected/Disconnected badge always reflects live reality, not just
+    // "a URL happens to be saved" -- a stopped Flask process must show
+    // Disconnected, not a stale Connected from a previous session.
+    const existing = getConfiguredBackendUrl();
+    if (!existing) return;
+    isBackendReachable(existing).then((ok) => {
+      setConnected(ok);
+      setCheckingConnection(false);
+    });
+  }, []);
+
+  const handleTestConnection = async () => {
+    const candidate = backendUrlInput.trim();
+    if (!candidate) {
+      show('Enter a backend URL to test.', 'error');
+      return;
+    }
+    setCheckingConnection(true);
+    setTestResult(null);
+    const ok = await isBackendReachable(candidate);
+    setCheckingConnection(false);
+    setTestResult(ok ? 'reachable' : 'unreachable');
+    show(
+      ok ? 'Backend reachable — GET /api/health responded OK.' : "Couldn't reach that backend URL.",
+      ok ? 'success' : 'error'
+    );
+  };
+
+  const handleSaveAndConnect = async () => {
+    const candidate = backendUrlInput.trim();
+    if (!candidate) {
+      show('Enter a backend URL first.', 'error');
+      return;
+    }
+    setCheckingConnection(true);
+    const ok = await isBackendReachable(candidate);
+    setBackendUrl(candidate);
+    setSavedBackendUrl(candidate);
+    setConnected(ok);
+    setCheckingConnection(false);
+    setTestResult(null);
+    show(
+      ok
+        ? 'Saved — the app will now use the real Python backend.'
+        : 'Saved, but the backend is not reachable yet. The app will use the local JavaScript fallback until it is.',
+      ok ? 'success' : 'info'
+    );
+  };
+
+  const handleDisconnect = () => {
+    clearBackendUrl();
+    setSavedBackendUrl('');
+    setConnected(false);
+    setTestResult(null);
+    show('Disconnected — the app will use the local JavaScript fallback only.', 'info');
+  };
 
   useEffect(() => {
     authService.getCurrentUser().then((u) => {
@@ -150,6 +236,93 @@ export default function SettingsScreen() {
                 { label: 'Inches', value: 'in' },
               ]}
             />
+          </Card>
+
+          <Card style={{ marginTop: spacing.md }}>
+            <View style={styles.backendHeaderRow}>
+              <Text style={typography.h3}>Backend Connection</Text>
+              {checkingConnection ? (
+                <View style={styles.statusPill}>
+                  <ActivityIndicator size="small" color={colors.textSecondary} />
+                  <Text style={[typography.caption, { color: colors.textSecondary }]}>Checking…</Text>
+                </View>
+              ) : (
+                <Badge
+                  label={connected ? 'Connected' : 'Disconnected'}
+                  tone={connected ? 'success' : 'neutral'}
+                  dot
+                />
+              )}
+            </View>
+            <Text style={[typography.bodySmall, { color: colors.textSecondary, marginBottom: spacing.md }]}>
+              Point the app at a running StitchPro Python backend (
+              <Text style={{ fontFamily: typography.bodyMedium.fontFamily }}>api/app.py</Text>) for real
+              digitizing, stitch-plan generation and multi-format export. When disconnected, Auto Digitize
+              still works using the built-in local JavaScript engine.
+            </Text>
+            <Input
+              label="Backend URL"
+              value={backendUrlInput}
+              onChangeText={(v) => {
+                setBackendUrlInput(v);
+                setTestResult(null);
+              }}
+              placeholder={LOCAL_DEV_BACKEND_URL}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              leftIcon={<Server size={16} color={colors.textTertiary} />}
+            />
+            <View style={styles.backendStatusRow}>
+              <Text style={[typography.caption, { color: colors.textTertiary }]}>
+                Active URL: {savedBackendUrl || 'none (using local fallback)'}
+              </Text>
+              {testResult && (
+                <View style={styles.testResultRow}>
+                  {testResult === 'reachable' ? (
+                    <Wifi size={13} color={colors.success} />
+                  ) : (
+                    <WifiOff size={13} color={colors.danger} />
+                  )}
+                  <Text
+                    style={[
+                      typography.caption,
+                      { color: testResult === 'reachable' ? colors.success : colors.danger },
+                    ]}
+                  >
+                    {testResult === 'reachable' ? 'Reachable' : 'Unreachable'}
+                  </Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.backendButtonRow}>
+              <Button
+                label="Test Connection"
+                variant="outline"
+                size="sm"
+                loading={checkingConnection}
+                onPress={handleTestConnection}
+                style={{ flex: 1 }}
+              />
+              <Button
+                label="Save & Connect"
+                variant="primary"
+                size="sm"
+                loading={checkingConnection}
+                onPress={handleSaveAndConnect}
+                style={{ flex: 1 }}
+              />
+            </View>
+            {!!savedBackendUrl && (
+              <Button
+                label="Disconnect (use local fallback)"
+                variant="ghost"
+                size="sm"
+                onPress={handleDisconnect}
+                style={{ marginTop: spacing.xs }}
+                fullWidth
+              />
+            )}
           </Card>
         </View>
 
@@ -289,6 +462,33 @@ const styles = StyleSheet.create({
   toggleRowBorder: {
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+  },
+  backendHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xxs,
+  },
+  backendStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  testResultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xxs,
+  },
+  backendButtonRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
   },
   dangerCard: {
     borderColor: colors.dangerTint,

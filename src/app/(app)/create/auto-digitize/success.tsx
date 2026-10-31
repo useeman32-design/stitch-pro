@@ -6,6 +6,7 @@ import { colors, radius, spacing, typography } from '@/theme';
 import { ScreenContainer } from '@/components/layout/ScreenContainer';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
 import { EmbossedStitchCanvas } from '@/components/ui/EmbossedStitchCanvas';
 import { StitchStats } from '@/components/ui/StitchStats';
 import { useToast } from '@/components/ui/Toast';
@@ -28,6 +29,12 @@ export default function DigitizeSuccessScreen() {
   const savedRef = useRef(false);
   const [saved, setSaved] = useState(false);
   const [downloadingFormat, setDownloadingFormat] = useState<StitchFormat | null>(null);
+  /** Which engine actually produced the most recently downloaded file --
+   * only ever set from a real `downloadStitchFile` result, never assumed
+   * ahead of time, so this never claims the Python backend ran unless a
+   * real request to it just succeeded (see `downloadStitchFile`'s
+   * `engine` field). `null` until the user downloads at least one file. */
+  const [lastDownloadEngine, setLastDownloadEngine] = useState<'backend' | 'client' | null>(null);
 
   useEffect(() => {
     if (!artwork || !stitchPlan) {
@@ -81,7 +88,9 @@ export default function DigitizeSuccessScreen() {
     try {
       const result = await downloadStitchFile(dstPoints, threadColors, format, baseName);
       if (result.ok) {
-        show(`${result.filename} downloaded — a real, machine-readable file from the StitchPro engine.`, 'success');
+        setLastDownloadEngine(result.engine);
+        const via = result.engine === 'backend' ? 'the Python backend' : 'the local fallback encoder';
+        show(`${result.filename} downloaded — a real, machine-readable file from ${via}.`, 'success');
       } else if (result.reason === 'backend-unreachable') {
         show(
           `Couldn't reach the StitchPro backend to generate a real ${format} file right now — DST (works on virtually every machine) is still available below.`,
@@ -142,7 +151,16 @@ export default function DigitizeSuccessScreen() {
         <StitchStats {...stitchPlan} />
       </Card>
 
-      <Text style={[typography.h3, styles.downloadHeading]}>Download Format</Text>
+      <View style={styles.downloadHeadingRow}>
+        <Text style={typography.h3}>Download Format</Text>
+        {lastDownloadEngine && (
+          <Badge
+            label={lastDownloadEngine === 'backend' ? 'Via Python Backend' : 'Via Local Fallback'}
+            tone={lastDownloadEngine === 'backend' ? 'success' : 'warning'}
+            dot
+          />
+        )}
+      </View>
       <View style={styles.formatGrid}>
         {FORMATS.map((format, i) => (
           <Pressable
@@ -238,6 +256,13 @@ const styles = StyleSheet.create({
     marginVertical: spacing.md,
   },
   downloadHeading: {
+    marginTop: spacing.xl,
+    marginBottom: spacing.sm,
+  },
+  downloadHeadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginTop: spacing.xl,
     marginBottom: spacing.sm,
   },
